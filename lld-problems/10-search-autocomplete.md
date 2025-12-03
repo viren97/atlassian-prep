@@ -5,6 +5,162 @@ Design a search autocomplete system that suggests completions as the user types.
 
 ---
 
+## Code Flow Walkthrough
+
+### `insert(word, frequency)` - Add Word to Trie
+
+```
+CALL: trie.insert("apple", frequency=5)
+
+STEP 1: Normalize Input
+├── normalizedWord = "apple".lowercase().trim()
+└── Ensures consistent lookup
+
+STEP 2: Traverse/Create Path
+├── current = root
+├── FOR each char in "apple":
+│   ├── 'a': current = root.children.getOrPut('a') { TrieNode() }
+│   ├── 'p': current = current.children.getOrPut('p') { TrieNode() }
+│   ├── 'p': current = current.children.getOrPut('p') { TrieNode() }
+│   ├── 'l': current = current.children.getOrPut('l') { TrieNode() }
+│   └── 'e': current = current.children.getOrPut('e') { TrieNode() }
+└── Creates nodes if they don't exist
+
+STEP 3: Mark End of Word
+├── current.isEndOfWord = true
+├── current.frequency += frequency  // Accumulate if exists
+└── current.word = "apple"
+
+STEP 4: Update Top Suggestions
+├── updateSuggestions("apple", frequency=5)
+│   ├── Walk from root to "apple" node
+│   ├── At each node, update topSuggestions list
+│   ├── Keep sorted by frequency, limit to maxSuggestions
+│   └── Enables O(1) suggestion retrieval
+
+TRIE STRUCTURE AFTER:
+        root
+          │
+          a
+          │
+          p
+          │
+          p
+          │
+          l
+          │
+          e [end, freq=5, word="apple"]
+```
+
+### `search(prefix)` - Get Autocomplete Suggestions
+
+```
+CALL: trie.search("app")
+RETURNS: ["apple", "application", "app"]
+
+STEP 1: Navigate to Prefix Node
+├── current = root
+├── FOR each char in "app":
+│   ├── 'a': current = root.children['a']
+│   │   └── IF null: return emptyList()
+│   ├── 'p': current = current.children['p']
+│   └── 'p': current = current.children['p']
+└── current now points to node after "app"
+
+STEP 2: Return Cached Suggestions (Optimized)
+├── IF current.topSuggestions is cached:
+│   └── Return topSuggestions  // O(1)!
+
+STEP 3: OR Collect All Words (Non-optimized)
+├── collectWords(current, prefix="app"):
+│   ├── IF current.isEndOfWord:
+│   │   └── Add (current.word, current.frequency) to results
+│   ├── FOR each (char, child) in current.children:
+│   │   └── collectWords(child, prefix + char)
+│   └── Return all words with this prefix
+├── Sort by frequency (descending)
+└── Return top k results
+
+EXAMPLE TRIE:
+        root
+          │
+          a
+          │
+          p
+          │
+          p [end, "app", freq=3]
+         / \
+        l   i
+        │   │
+        e   c
+        │   │
+   [end]│   a
+        │   │
+      "apple"   t
+       freq=5   │
+                i
+                │
+                o
+                │
+                n [end, "application", freq=2]
+
+search("app") → ["apple"(5), "app"(3), "application"(2)]
+```
+
+### Wildcard Search Flow
+
+```
+CALL: trie.searchWithWildcard("a*ple")
+(* matches any single character)
+
+STEP 1: Recursive Search with Wildcards
+├── searchWildcard(node=root, pattern="a*ple", index=0)
+│   ├── char = 'a': match exactly
+│   │   └── Recurse: node=node.children['a'], pattern, index=1
+│   ├── char = '*': match any
+│   │   └── FOR each child in node.children:
+│   │       └── Recurse: child, pattern, index=2
+│   ├── char = 'p': match exactly
+│   ├── char = 'l': match exactly
+│   ├── char = 'e': match exactly
+│   └── IF index == pattern.length AND node.isEndOfWord:
+│       └── Add to results
+
+MATCHES:
+├── "apple" (a-p-p-l-e, * matches 'p')
+├── "ample" (a-m-p-l-e, * matches 'm')
+└── etc.
+```
+
+### Frequency Tracking and Ranking
+
+```
+SCENARIO: Search history updates word frequency
+
+USER ACTIONS:
+├── User searches "apple" → increment frequency
+├── trie.search("app") returns ["apple", "app", "application"]
+├── User selects "application"
+├── trie.incrementFrequency("application")
+│   ├── Navigate to "application" node
+│   ├── node.frequency++
+│   └── updateSuggestions() along path
+
+AFTER MANY SELECTIONS:
+├── "application" frequency: 50
+├── "apple" frequency: 30
+├── "app" frequency: 10
+├── trie.search("app") returns ["application", "apple", "app"]
+└── More frequent words rank higher
+
+DECAY STRATEGY (optional):
+├── Every N days: frequency *= 0.9
+├── Old popular terms fade
+└── Recent searches rank higher
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

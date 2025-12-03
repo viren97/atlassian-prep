@@ -33,6 +33,151 @@ Champion on last lap: ("Driver3", 20)
 
 ---
 
+## Code Flow Walkthrough
+
+### `addLapTime(driverId, lapTime)` - Record Lap
+
+```
+CALL: tracker.addLapTime("Hamilton", 95.5)
+
+STEP 1: Get or Create Driver Stats
+├── stats = driverStats.getOrPut("Hamilton") { DriverStats("Hamilton") }
+└── New drivers start with empty lap history
+
+STEP 2: Calculate Delta (Improvement)
+├── stats.addLapTime(95.5):
+│   ├── lock.write { ... }  // Thread-safe
+│   ├── 
+│   ├── // Calculate previous average
+│   ├── IF lapTimes.isEmpty():
+│   │   └── previousAverage = 95.5 (first lap = baseline)
+│   ├── ELSE:
+│   │   └── previousAverage = lapTimes.average()  // e.g., 98.0
+│   ├── 
+│   ├── // Record lap time
+│   ├── lapTimes.add(95.5)
+│   ├── 
+│   ├── // Calculate delta
+│   ├── delta = previousAverage - currentLap
+│   ├── delta = 98.0 - 95.5 = +2.5 seconds
+│   │   ├── Positive = FASTER than average (improvement!)
+│   │   └── Negative = SLOWER than average
+│   ├── 
+│   ├── lastDelta = 2.5
+│   └── Return 2.5
+
+STEP 3: Return Result
+└── Return LapResult(
+        driverId = "Hamilton",
+        lapTime = 95.5,
+        delta = +2.5,
+        isImprovement = true
+    )
+
+DELTA INTERPRETATION:
+├── delta > 0: Faster than average → improving
+├── delta = 0: Same as average → consistent
+└── delta < 0: Slower than average → declining
+```
+
+### `getBestProgressingDriver()` - Find Most Improved
+
+```
+CALL: tracker.getBestProgressingDriver()
+
+STEP 1: Calculate Progress Score for Each Driver
+├── FOR each driver in driverStats:
+│   ├── 
+│   ├── // Method 1: Average of recent deltas
+│   ├── recentDeltas = lastNDeltas(5)
+│   ├── progressScore = recentDeltas.average()
+│   ├── 
+│   ├── // Method 2: Trend analysis
+│   ├── OR progressScore = calculateTrend(lapTimes)
+│   │   ├── Use linear regression
+│   │   └── Negative slope = getting faster
+│   ├── 
+│   └── Store (driver, progressScore)
+
+STEP 2: Find Maximum Progress
+├── Sort by progressScore (descending)
+├── Return driver with highest score
+└── Ties: return first (or use secondary criteria)
+
+EXAMPLE:
+├── Hamilton: deltas=[+2.5, +1.0, +0.5, -0.2, +0.8] → avg=+0.92
+├── Verstappen: deltas=[+0.3, +0.4, +0.6, +0.5, +0.7] → avg=+0.50
+├── Leclerc: deltas=[-0.5, +1.5, +2.0, +1.0, +0.5] → avg=+0.90
+└── Winner: Hamilton (+0.92 avg improvement)
+```
+
+### Lap Time Tracking with Best Lap
+
+```
+SCENARIO: Track best lap time across session
+
+addLapTime("Hamilton", 98.5):
+├── lapTimes=[98.5], bestLap=98.5, delta=0
+
+addLapTime("Hamilton", 96.0):
+├── lapTimes=[98.5, 96.0]
+├── avg=98.5, delta=98.5-96.0=+2.5
+├── bestLap=min(98.5, 96.0)=96.0
+└── New best lap!
+
+addLapTime("Hamilton", 97.0):
+├── lapTimes=[98.5, 96.0, 97.0]
+├── avg=97.25, delta=97.25-97.0=+0.25
+└── bestLap=96.0 (unchanged)
+
+addLapTime("Hamilton", 95.2):
+├── lapTimes=[98.5, 96.0, 97.0, 95.2]
+├── avg=96.63, delta=96.63-95.2=+1.43
+├── bestLap=95.2 (NEW BEST!)
+└── Improvement of 0.8s from previous best
+
+LEADERBOARD:
+├── Best Laps:
+│   ├── 1. Hamilton: 95.2
+│   ├── 2. Verstappen: 95.8
+│   └── 3. Leclerc: 96.1
+├── Most Improved (this session):
+│   ├── 1. Hamilton: +2.5 avg delta
+│   └── 2. Leclerc: +1.8 avg delta
+```
+
+### Concurrent Update Handling
+
+```
+SCENARIO: Multiple threads updating same driver
+
+THREAD 1: addLapTime("Hamilton", 95.0)
+THREAD 2: addLapTime("Hamilton", 96.0)
+
+WITH ReentrantReadWriteLock:
+├── Thread 1 acquires write lock
+├── Thread 2 waits...
+├── Thread 1:
+│   ├── Calculate average from current lapTimes
+│   ├── Add 95.0 to lapTimes
+│   ├── Calculate delta
+│   └── Release lock
+├── Thread 2 acquires lock
+├── Thread 2:
+│   ├── Calculate average (now includes 95.0)
+│   ├── Add 96.0 to lapTimes
+│   └── Calculate delta correctly
+└── Both updates are accurate
+
+WITHOUT LOCK (race condition):
+├── Both threads read same average
+├── Both add to lapTimes concurrently
+├── Possible: one write lost
+└── Deltas calculated incorrectly
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

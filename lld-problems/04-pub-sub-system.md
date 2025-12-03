@@ -223,6 +223,151 @@ Design a Publish-Subscribe messaging system where publishers can send messages t
 
 ---
 
+## Code Flow Walkthrough
+
+### `publish(message)` Step-by-Step
+
+```
+CALL: topic.publish(Message(payload="Hello", topic="news"))
+
+STEP 1: Acquire Write Lock
+├── lock.write { ... }
+└── Prevents concurrent modification of subscriber list
+
+STEP 2: Add to Message History (Optional)
+├── messageHistory.add(message)
+├── IF messageHistory.size > historyLimit:
+│   └── messageHistory.poll()  // Remove oldest, keep bounded
+└── Purpose: Allow late subscribers to replay messages
+
+STEP 3: Notify Each Subscriber
+├── subscribers.values.forEach { filteredSub ->
+│   ├── 
+│   ├── // Step 3a: Apply Filter
+│   ├── IF filteredSub.filter != null:
+│   │   ├── shouldDeliver = filter(message)
+│   │   └── IF !shouldDeliver: skip this subscriber
+│   ├── 
+│   ├── // Step 3b: Choose Delivery Mode
+│   ├── IF async delivery:
+│   │   └── executor.submit { subscriber.onMessage(message) }
+│   ├── ELSE (sync delivery):
+│   │   └── subscriber.onMessage(message)  // Blocks publisher
+│   └── 
+│ }
+
+ASYNC vs SYNC DELIVERY:
+├── ASYNC (default):
+│   ├── Publisher returns immediately
+│   ├── Each subscriber processed in thread pool
+│   └── Subscriber failures don't affect publisher
+├── SYNC:
+│   ├── Publisher waits for each subscriber
+│   ├── Ordered delivery guaranteed
+│   └── One slow subscriber blocks everyone
+
+EXAMPLE:
+├── Message: {topic:"news", payload:"Breaking news!"}
+├── Subscribers: [SubA(filter=null), SubB(filter=onlyUrgent)]
+├── SubA receives message (no filter)
+├── SubB: onlyUrgent("Breaking news!") → false → skipped
+```
+
+### `subscribe(topic, subscriber)` Step-by-Step
+
+```
+CALL: broker.subscribe("news", mySubscriber, filter=onlyPriority)
+
+STEP 1: Get or Create Topic
+├── topic = topics.getOrPut("news") { Topic("news") }
+└── Topic created on-demand if doesn't exist
+
+STEP 2: Register Subscriber
+├── topic.addSubscriber(subscriber, filter):
+│   ├── lock.write { ... }
+│   ├── subscribers[subscriber.getId()] = FilteredSubscriber(subscriber, filter)
+│   └── ConcurrentHashMap: thread-safe storage
+
+STEP 3: Replay Historical Messages (Optional)
+├── IF replayHistory enabled:
+│   ├── FOR each message in messageHistory:
+│   │   ├── IF filter == null OR filter(message):
+│   │   │   └── subscriber.onMessage(message)
+│   └── New subscriber catches up on missed messages
+
+UNSUBSCRIBE FLOW:
+├── topic.removeSubscriber(subscriberId):
+│   ├── lock.write { ... }
+│   └── subscribers.remove(subscriberId)
+```
+
+### MessageBroker: Coordinating Publishers and Subscribers
+
+```
+SETUP:
+broker = MessageBroker()
+
+PUBLISH FLOW:
+├── broker.publish("news", message):
+│   ├── topic = topics["news"]
+│   ├── IF topic == null: throw TopicNotFoundException
+│   └── topic.publish(message)
+
+SUBSCRIBE FLOW:
+├── broker.subscribe("news", subscriber):
+│   ├── topic = topics.getOrPut("news") { Topic("news") }
+│   └── topic.addSubscriber(subscriber)
+
+TOPIC LIFECYCLE:
+├── createTopic("news"):
+│   ├── IF topics.containsKey("news"): throw AlreadyExists
+│   └── topics["news"] = Topic("news")
+├── deleteTopic("news"):
+│   ├── topic = topics.remove("news")
+│   ├── IF topic != null:
+│   │   └── Notify all subscribers: onTopicDeleted()
+│   └── ELSE: throw TopicNotFoundException
+
+COMPLETE EXAMPLE:
+├── 1. broker.createTopic("news")
+├── 2. broker.subscribe("news", subA)
+├── 3. broker.subscribe("news", subB, filter=onlyUrgent)
+├── 4. broker.publish("news", Message("Regular update"))
+│   ├── subA receives message
+│   └── subB: filter rejects → no delivery
+├── 5. broker.publish("news", Message("URGENT: System down"))
+│   ├── subA receives message
+│   └── subB: filter accepts → delivers
+```
+
+### Filtered Subscription Flow
+
+```
+SCENARIO: Subscribe to "orders" but only for high-value orders
+
+SETUP:
+val filter: (Message<Order>) -> Boolean = { msg ->
+    msg.payload.amount > 1000  // Only orders > $1000
+}
+broker.subscribe("orders", mySubscriber, filter)
+
+PUBLISH ORDER:
+├── broker.publish("orders", Message(Order(id=1, amount=500)))
+│   ├── Check filter: 500 > 1000 = false
+│   └── mySubscriber: NOT notified
+├── broker.publish("orders", Message(Order(id=2, amount=5000)))
+│   ├── Check filter: 5000 > 1000 = true
+│   └── mySubscriber: receives message
+
+FILTER TYPES:
+├── Content-based: filter on message payload
+├── Header-based: filter on message headers
+├── Topic pattern: filter on topic wildcards
+└── Combined: multiple conditions
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

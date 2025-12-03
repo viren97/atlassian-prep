@@ -5,6 +5,168 @@ Design a Snake and Ladder game that supports multiple players, configurable boar
 
 ---
 
+## Code Flow Walkthrough
+
+### `playTurn()` - Single Turn Flow
+
+```
+CALL: game.playTurn()
+STATE: Player "Alice" at position 15
+
+STEP 1: Validate Game State
+├── IF status != IN_PROGRESS:
+│   └── throw IllegalStateException("Game not in progress")
+
+STEP 2: Get Current Player
+├── player = players[currentPlayerIndex]  // Alice
+└── currentPosition = 15
+
+STEP 3: Roll Dice
+├── diceValue = dice.roll()  // Returns 1-6
+├── Example: diceValue = 4
+└── For multiple dice: sum all rolls
+
+STEP 4: Calculate New Position
+├── board.getNextPosition(currentPosition=15, diceRoll=4):
+│   ├── newPosition = 15 + 4 = 19
+│   ├── 
+│   ├── // Check if beyond board
+│   ├── IF newPosition > boardSize (100):
+│   │   └── Return (currentPosition, NORMAL)  // Stay in place
+│   ├── 
+│   ├── // Check if won
+│   ├── IF newPosition == boardSize:
+│   │   └── Return (100, WIN)
+│   ├── 
+│   ├── // Check for snake or ladder
+│   ├── MATCH cells[19]:
+│   │   ├── Snake(tail=7) → Return (7, SNAKE)
+│   │   ├── Ladder(top=38) → Return (38, LADDER)
+│   │   └── Normal → Return (19, NORMAL)
+
+STEP 5: Update Player Position
+├── player.position = newPosition
+└── Example: Alice moves 15 → 19
+
+STEP 6: Check Win Condition
+├── IF newPosition == boardSize:
+│   ├── status = FINISHED
+│   ├── winner = player
+│   └── Return TurnResult(winner=Alice, ...)
+
+STEP 7: Advance to Next Player
+├── currentPlayerIndex = (currentPlayerIndex + 1) % players.size
+└── Example: 0 → 1 (Bob's turn)
+
+STEP 8: Return Turn Result
+└── TurnResult(
+        player = Alice,
+        diceValue = 4,
+        previousPosition = 15,
+        newPosition = 19,
+        moveType = NORMAL,
+        winner = null
+    )
+```
+
+### Snake/Ladder Detection Flow
+
+```
+SCENARIO: Player lands on snake head at position 45
+
+board.getNextPosition(currentPosition=41, diceRoll=4):
+
+STEP 1: Calculate Raw Position
+├── newPosition = 41 + 4 = 45
+
+STEP 2: Check Cell Type
+├── cell = cells[45]
+├── cell is BoardCell.Snake(tail=12)
+
+STEP 3: Apply Snake Effect
+├── finalPosition = 12 (snake tail)
+├── moveType = SNAKE
+└── Return (12, SNAKE)
+
+VISUAL:
+    45 [S]────────────┐
+       │    Snake!    │
+       │              │
+    12 ◄──────────────┘
+       Player lands here
+
+LADDER EXAMPLE:
+board.getNextPosition(currentPosition=10, diceRoll=4):
+├── newPosition = 10 + 4 = 14
+├── cell = cells[14] = BoardCell.Ladder(top=35)
+├── finalPosition = 35
+└── Return (35, LADDER)
+
+VISUAL:
+    35 ◄──────────────┐
+       │    Ladder!   │
+       │              │
+    14 [L]────────────┘
+       Player lands here
+```
+
+### Win Condition Flow
+
+```
+SCENARIO: Player at position 97, rolls 3
+
+board.getNextPosition(97, 3):
+├── newPosition = 97 + 3 = 100
+├── newPosition == boardSize (100)
+└── Return (100, WIN)
+
+EXACT ROLL VARIANT (optional rule):
+board.getNextPosition(97, 5):
+├── newPosition = 97 + 5 = 102
+├── newPosition > boardSize (100)
+├── // Must land exactly on 100
+└── Return (97, NORMAL)  // Bounce back, stay in place
+
+BOUNCE BACK VARIANT:
+board.getNextPosition(97, 5):
+├── newPosition = 97 + 5 = 102
+├── overshoot = 102 - 100 = 2
+├── bounceBack = 100 - 2 = 98
+└── Return (98, NORMAL)  // Player at 98
+```
+
+### Multi-Player Turn Rotation
+
+```
+SETUP: players = [Alice, Bob, Carol], currentPlayerIndex = 0
+
+TURN 1: playTurn()
+├── Current: Alice (index 0)
+├── Alice rolls and moves
+├── currentPlayerIndex = (0 + 1) % 3 = 1
+└── Next: Bob
+
+TURN 2: playTurn()
+├── Current: Bob (index 1)
+├── Bob rolls and moves
+├── currentPlayerIndex = (1 + 1) % 3 = 2
+└── Next: Carol
+
+TURN 3: playTurn()
+├── Current: Carol (index 2)
+├── Carol rolls and moves
+├── currentPlayerIndex = (2 + 1) % 3 = 0
+└── Next: Alice (cycle repeats)
+
+PLAYER SKIP (on extra turn rule):
+├── Some variants: rolling 6 gives extra turn
+├── IF diceValue == 6:
+│   └── Don't increment currentPlayerIndex
+└── Same player goes again
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

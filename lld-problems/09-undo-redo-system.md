@@ -5,6 +5,179 @@ Design an Undo-Redo system using the Command Pattern that can track and reverse 
 
 ---
 
+## Code Flow Walkthrough
+
+### `execute(command)` - Execute and Track
+
+```
+CALL: manager.execute(InsertTextCommand("Hello"))
+
+STEP 1: Check for Command Merging
+├── IF enableMerging AND undoStack.isNotEmpty():
+│   ├── lastCommand = undoStack.peek()
+│   ├── IF lastCommand.canMergeWith(command):
+│   │   ├── Example: Typing "H" then "e" → merge to "He"
+│   │   ├── undoStack.pop()  // Remove last
+│   │   ├── merged = lastCommand.mergeWith(command)
+│   │   ├── merged.execute()
+│   │   ├── undoStack.push(merged)
+│   │   ├── redoStack.clear()
+│   │   └── Return (merged command executed)
+│   └── ELSE: proceed with separate command
+
+STEP 2: Execute the Command
+├── command.execute()
+│   ├── InsertTextCommand.execute():
+│   │   ├── previousState = document.getText()
+│   │   ├── document.insert(position, "Hello")
+│   │   └── Store previousState for undo
+
+STEP 3: Track in Undo Stack
+├── undoStack.push(command)
+└── Command can now be undone
+
+STEP 4: Clear Redo Stack
+├── redoStack.clear()
+└── New action invalidates previous redo history
+
+STEP 5: Enforce History Limit
+├── WHILE undoStack.size > historyLimit:
+│   └── undoStack.removeLast()  // Remove oldest
+└── Prevents unbounded memory growth
+
+STACK STATE:
+├── Before: undoStack=[A,B,C], redoStack=[X]
+├── execute(D)
+├── After:  undoStack=[D,A,B,C], redoStack=[]
+└── Note: X is gone (can't redo after new action)
+```
+
+### `undo()` - Undo Last Action
+
+```
+CALL: manager.undo()
+
+STEP 1: Check if Undo Available
+├── IF undoStack.isEmpty():
+│   └── Return false (nothing to undo)
+
+STEP 2: Pop from Undo Stack
+├── command = undoStack.pop()
+└── Remove from undo history
+
+STEP 3: Undo the Command
+├── command.undo()
+│   ├── InsertTextCommand.undo():
+│   │   └── document.setText(previousState)
+│   ├── DeleteTextCommand.undo():
+│   │   └── document.insert(position, deletedText)
+│   └── Restore to before this command
+
+STEP 4: Push to Redo Stack
+├── redoStack.push(command)
+└── Can now redo this undone action
+
+STEP 5: Notify Listeners
+└── notifyStateChanged()
+
+STACK STATE:
+├── Before: undoStack=[D,C,B,A], redoStack=[]
+├── undo()  // Undoes D
+├── After:  undoStack=[C,B,A], redoStack=[D]
+└── Document state: before D was executed
+```
+
+### `redo()` - Redo Undone Action
+
+```
+CALL: manager.redo()
+
+STEP 1: Check if Redo Available
+├── IF redoStack.isEmpty():
+│   └── Return false (nothing to redo)
+
+STEP 2: Pop from Redo Stack
+├── command = redoStack.pop()
+
+STEP 3: Re-execute the Command
+├── command.execute()
+└── Same as original execution
+
+STEP 4: Push to Undo Stack
+├── undoStack.push(command)
+
+STEP 5: Notify Listeners
+└── notifyStateChanged()
+
+STACK STATE:
+├── Before: undoStack=[C,B,A], redoStack=[D,E]
+├── redo()  // Redoes D
+├── After:  undoStack=[D,C,B,A], redoStack=[E]
+└── Document state: after D was executed
+```
+
+### Command Merging Example (Typing)
+
+```
+SCENARIO: User types "Hello" one character at a time
+
+TYPE 'H':
+├── execute(InsertText("H", pos=0))
+├── undoStack=[Insert("H")]
+└── Document: "H"
+
+TYPE 'e':
+├── execute(InsertText("e", pos=1))
+├── canMergeWith? Insert("H").canMerge(Insert("e"))
+│   ├── Same type? Yes
+│   ├── Adjacent position? 0+1=1, new pos=1, Yes
+│   └── Within time threshold? Yes
+├── Merge: Insert("H") + Insert("e") = Insert("He")
+├── undoStack=[Insert("He")]
+└── Document: "He"
+
+TYPE 'l':
+├── Merge: Insert("He") + Insert("l") = Insert("Hel")
+├── undoStack=[Insert("Hel")]
+└── Document: "Hel"
+
+... continue typing ...
+
+RESULT:
+├── undoStack=[Insert("Hello")]
+├── Single undo removes entire word
+└── Better UX than undoing one character at a time
+```
+
+### Composite Command (Batch Operations)
+
+```
+SCENARIO: Find and Replace "cat" with "dog"
+
+CREATE COMPOSITE:
+├── composite = CompositeCommand([
+│   │   DeleteText(pos=0, text="cat"),
+│   │   InsertText(pos=0, text="dog"),
+│   │   DeleteText(pos=20, text="cat"),
+│   │   InsertText(pos=20, text="dog")
+│   ])
+
+EXECUTE:
+├── composite.execute():
+│   ├── FOR each subCommand in commands:
+│   │   └── subCommand.execute()
+│   └── All changes happen together
+
+UNDO:
+├── composite.undo():
+│   ├── FOR each subCommand in commands.reversed():
+│   │   └── subCommand.undo()
+│   └── All changes reversed in opposite order
+└── Single undo reverts entire find/replace
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

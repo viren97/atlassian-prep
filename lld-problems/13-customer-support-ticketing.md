@@ -10,6 +10,181 @@ Design a customer support ticketing system that allows customers to rate support
 
 ---
 
+## Code Flow Walkthrough
+
+### `addRating(agentId, rating)` - Rate an Agent
+
+```
+CALL: system.addRating("agent-123", rating=4.5, timestamp=now)
+
+STEP 1: Get or Create Agent Stats
+├── stats = agentStats.getOrPut("agent-123") { AgentStats("agent-123") }
+└── New agents start with empty ratings
+
+STEP 2: Add Rating to Stats
+├── stats.addRating(4.5, timestamp=Jan15):
+│   ├── lock.write { ... }  // Thread-safe
+│   ├── 
+│   ├── // Update all-time stats
+│   ├── allTimeRatings.add(RatingEntry(4.5, Jan15))
+│   ├── 
+│   ├── // Update monthly stats
+│   ├── yearMonth = YearMonth.of(2024, JANUARY)
+│   ├── monthlyRatings.getOrPut(yearMonth) { mutableListOf() }
+│   │   .add(4.5)
+│   └── 
+│       // Running average optimization
+│       totalSum += 4.5
+│       count++
+
+STEP 3: Return Updated Stats
+└── Return AgentStats(
+        agentId = "agent-123",
+        averageRating = 4.3,
+        ratingCount = 47,
+        monthlyAverage[Jan2024] = 4.5
+    )
+```
+
+### `getTopAgents(n)` - Get Best Agents
+
+```
+CALL: system.getTopAgents(limit=5)
+
+STEP 1: Get All Agent Stats
+├── allStats = agentStats.values.toList()
+
+STEP 2: Sort by AgentComparator
+├── Sort criteria (in order):
+│   ├── 1. Average Rating (DESCENDING)
+│   │   └── Higher rating = ranked higher
+│   ├── 2. Rating Count (DESCENDING)
+│   │   └── More ratings = more reliable
+│   └── 3. Agent Name (ASCENDING)
+│       └── Alphabetical tie-breaker
+
+STEP 3: Comparison Example
+├── Agents:
+│   ├── Alice: avg=4.5, count=100
+│   ├── Bob:   avg=4.5, count=50
+│   ├── Carol: avg=4.8, count=30
+│   ├── Dave:  avg=4.5, count=100
+├── 
+├── Sorting:
+│   ├── Carol: 4.8 (highest avg) → #1
+│   ├── Alice vs Bob vs Dave: same avg (4.5)
+│   │   ├── Alice: 100 ratings
+│   │   ├── Dave: 100 ratings (tied with Alice)
+│   │   │   └── Alice < Dave alphabetically → Alice #2
+│   │   └── Dave: 100 ratings → #3
+│   └── Bob: 50 ratings → #4
+├── 
+└── Result: [Carol, Alice, Dave, Bob]
+
+STEP 4: Return Top N
+└── Return sorted.take(5)
+```
+
+### `getMonthlyBestAgent(yearMonth)` - Monthly Winner
+
+```
+CALL: system.getMonthlyBestAgent(YearMonth.of(2024, JANUARY))
+
+STEP 1: Filter Agents with January Ratings
+├── FOR each agent in agentStats:
+│   ├── monthlyRatings = stats.getMonthlyRatings(Jan2024)
+│   ├── IF monthlyRatings.isEmpty():
+│   │   └── Skip agent (no ratings this month)
+│   └── ELSE: include in candidates
+
+STEP 2: Calculate Monthly Average
+├── FOR each candidate:
+│   └── monthlyAvg = candidate.getMonthlyAverage(Jan2024)
+
+STEP 3: Apply AgentComparator (monthly mode)
+├── AgentComparator(yearMonth = Jan2024):
+│   ├── Uses getMonthlyAverage() instead of all-time
+│   └── Same tie-breaking rules
+
+STEP 4: Return Winner
+└── Return candidates.maxWithComparator()
+
+EXAMPLE:
+├── January ratings:
+│   ├── Alice: [4.5, 4.8, 4.2] → avg=4.5, count=3
+│   ├── Bob:   [5.0, 4.9, 5.0, 4.8] → avg=4.925, count=4
+│   └── Carol: (no January ratings)
+├── 
+├── Comparison:
+│   ├── Bob: 4.925 > Alice: 4.5
+│   └── Carol: excluded (no data)
+├── 
+└── Winner: Bob (highest January average)
+```
+
+### `exportToCSV()` - Data Export Flow
+
+```
+CALL: system.exportToCSV(outputPath="agents_report.csv")
+
+STEP 1: Collect All Agent Data
+├── rows = []
+├── FOR each agent in agentStats:
+│   ├── stats = agent.getStats()
+│   ├── row = CSVRow(
+│   │   │   agentId = stats.agentId,
+│   │   │   name = stats.name,
+│   │   │   averageRating = stats.getAverageRating(),
+│   │   │   totalRatings = stats.getRatingCount(),
+│   │   │   jan2024Avg = stats.getMonthlyAverage(Jan2024),
+│   │   │   feb2024Avg = stats.getMonthlyAverage(Feb2024),
+│   │   │   ...
+│   │   )
+│   └── rows.add(row)
+
+STEP 2: Sort for Report
+├── Sort by average rating (descending)
+
+STEP 3: Write CSV
+├── headers = ["Agent ID", "Name", "Avg Rating", "Total Ratings", ...]
+├── writeHeader(outputPath, headers)
+├── FOR each row in rows:
+│   └── writeLine(row.toCSV())
+
+OUTPUT:
+Agent ID,Name,Avg Rating,Total Ratings,Jan 2024,Feb 2024
+agent-001,Alice,4.5,120,4.6,4.4
+agent-002,Bob,4.8,85,4.9,4.7
+...
+```
+
+### Handling Rating Ties
+
+```
+SCENARIO: Two agents have identical stats
+
+Alice: avg=4.5, count=100
+Zara:  avg=4.5, count=100
+
+COMPARATOR FLOW:
+├── compare(Alice, Zara):
+│   ├── avg1=4.5, avg2=4.5 → equal, continue
+│   ├── count1=100, count2=100 → equal, continue
+│   ├── name1="Alice", name2="Zara"
+│   └── "Alice" < "Zara" alphabetically → Alice wins
+
+RESULT:
+├── Ranking: [Alice, Zara]
+└── Alice ranked higher due to name tie-breaker
+
+WHY THIS DESIGN?
+├── Deterministic: same input → same output
+├── Fair: no randomness
+└── Testable: predictable behavior
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

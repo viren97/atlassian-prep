@@ -5,6 +5,185 @@ Design a meeting scheduler that can book meetings, find available slots, and han
 
 ---
 
+## Code Flow Walkthrough
+
+### `scheduleMeeting(attendees, duration)` - Schedule Meeting
+
+```
+CALL: scheduler.scheduleMeeting(
+    attendees = ["Alice", "Bob", "Carol"],
+    duration = 60.minutes,
+    preferredRange = 9:00-17:00
+)
+
+STEP 1: Get Each Attendee's Calendar
+├── calendars = attendees.map { calendarRegistry[it] }
+└── Each calendar has list of existing meetings
+
+STEP 2: Find Common Available Slots
+├── findCommonSlots(calendars, date, duration):
+│   ├── 
+│   ├── FOR each calendar:
+│   │   ├── Get available slots for the day
+│   │   │   ├── Start with full day: [9:00-17:00]
+│   │   │   ├── Subtract each meeting time
+│   │   │   └── Result: gaps between meetings
+│   │   └── Alice: [9:00-10:00, 11:00-12:00, 14:00-17:00]
+│   ├── 
+│   ├── Intersect all calendars:
+│   │   ├── Alice: [9:00-10:00, 11:00-12:00, 14:00-17:00]
+│   │   ├── Bob:   [9:30-12:00, 13:00-15:00]
+│   │   ├── Carol: [9:00-11:00, 13:00-17:00]
+│   │   └── Common: [9:30-10:00, 14:00-15:00]
+│   ├── 
+│   ├── Filter by duration (60 min needed):
+│   │   ├── 9:30-10:00 (30 min) ✗ too short
+│   │   └── 14:00-15:00 (60 min) ✓ fits!
+│   └── Return [14:00-15:00]
+
+STEP 3: Select Best Slot
+├── slot = availableSlots.first()  // or let user choose
+└── Selected: 14:00-15:00
+
+STEP 4: Create Meeting
+├── meeting = Meeting(
+│   │   id = UUID,
+│   │   title = "Team Sync",
+│   │   attendees = ["Alice", "Bob", "Carol"],
+│   │   timeSlot = 14:00-15:00,
+│   │   organizer = "Alice"
+│   )
+
+STEP 5: Add to All Calendars
+├── FOR each attendee:
+│   ├── calendar = calendarRegistry[attendee]
+│   └── calendar.addMeeting(meeting)
+└── All attendees now have this meeting blocked
+
+STEP 6: Send Invitations (optional)
+├── FOR each attendee:
+│   └── notificationService.sendInvite(attendee, meeting)
+```
+
+### `hasConflict(newSlot)` - Conflict Detection
+
+```
+CALL: calendar.hasConflict(TimeSlot(10:00, 11:00))
+
+EXISTING MEETINGS:
+├── Meeting A: 9:00-10:00
+├── Meeting B: 10:30-11:30
+└── Meeting C: 14:00-15:00
+
+CONFLICT CHECK ALGORITHM:
+├── FOR each existingMeeting in meetings:
+│   ├── existing = 9:00-10:00
+│   │   ├── Overlap? new.start(10:00) < existing.end(10:00) AND
+│   │   │            new.end(11:00) > existing.start(9:00)
+│   │   ├── 10:00 < 10:00? NO
+│   │   └── No overlap ✓
+│   ├── 
+│   ├── existing = 10:30-11:30
+│   │   ├── Overlap? 10:00 < 11:30 AND 11:00 > 10:30
+│   │   ├── 10:00 < 11:30? YES
+│   │   ├── 11:00 > 10:30? YES
+│   │   └── CONFLICT! ✗
+│   └── Return true (has conflict)
+
+OVERLAP FORMULA:
+├── Two slots overlap if:
+│   └── slot1.start < slot2.end AND slot1.end > slot2.start
+├── 
+├── Visual:
+│   ├── [====A====]         (9:00-10:00)
+│   ├──        [====NEW====] (10:00-11:00)
+│   ├──           [====B====] (10:30-11:30)
+│   └── NEW overlaps with B!
+```
+
+### `getAvailableSlots(date, duration)` - Find Free Time
+
+```
+CALL: calendar.getAvailableSlots(date=Jan15, duration=30.minutes)
+
+STEP 1: Get Working Hours
+├── workStart = 9:00
+├── workEnd = 17:00
+└── Total window: 8 hours
+
+STEP 2: Get Meetings for Date
+├── meetings = getMeetingsForDate(Jan15)
+├── Sort by start time
+└── [Meeting(9:30-10:00), Meeting(11:00-12:00), Meeting(14:00-16:00)]
+
+STEP 3: Find Gaps
+├── gaps = []
+├── 
+├── Gap before first meeting:
+│   ├── 9:00 to 9:30 = 30 min
+│   └── gaps.add(9:00-9:30)
+├── 
+├── Gap between meetings:
+│   ├── 10:00 to 11:00 = 60 min
+│   ├── gaps.add(10:00-11:00)
+│   ├── 12:00 to 14:00 = 120 min
+│   └── gaps.add(12:00-14:00)
+├── 
+├── Gap after last meeting:
+│   ├── 16:00 to 17:00 = 60 min
+│   └── gaps.add(16:00-17:00)
+
+STEP 4: Filter by Duration
+├── FOR each gap:
+│   ├── IF gap.duration >= 30.minutes:
+│   │   └── Keep gap
+│   └── ELSE: discard (too short)
+├── 
+└── Result: [9:00-9:30, 10:00-11:00, 12:00-14:00, 16:00-17:00]
+
+STEP 5: Split into Slots (optional)
+├── For 30-min slots from 12:00-14:00:
+│   └── [12:00-12:30, 12:30-13:00, 13:00-13:30, 13:30-14:00]
+```
+
+### Recurring Meeting Flow
+
+```
+CALL: scheduler.scheduleRecurring(
+    attendees = ["Team"],
+    recurrence = Weekly(MONDAY, 10:00, duration=60min),
+    until = Dec31
+)
+
+STEP 1: Generate Occurrences
+├── occurrences = recurrence.getOccurrences(from=today, until=Dec31)
+├── Result: [Jan8, Jan15, Jan22, Jan29, Feb5, ...]
+└── Each Monday at 10:00
+
+STEP 2: Check Conflicts for Each
+├── FOR each date in occurrences:
+│   ├── slot = TimeSlot(date, 10:00, 11:00)
+│   ├── IF anyAttendeeHasConflict(slot):
+│   │   ├── conflictDates.add(date)
+│   │   └── Mark as conflict
+│   └── ELSE: validDates.add(date)
+
+STEP 3: Create Recurring Meeting
+├── meeting = RecurringMeeting(
+│   │   recurrence = Weekly(MONDAY, 10:00),
+│   │   exceptions = conflictDates,  // Skip these
+│   │   instances = validDates
+│   )
+
+STEP 4: Handle Exceptions
+├── User can:
+│   ├── Skip specific occurrence
+│   ├── Reschedule specific occurrence
+│   └── Cancel entire series
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

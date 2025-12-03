@@ -5,6 +5,202 @@ Implement a middleware router for a web service that maps URL paths to handler s
 
 ---
 
+## Code Flow Walkthrough
+
+### `addRoute(path, handler)` - Register Route
+
+```
+CALL: router.addRoute("/api/users/:id/profile", "UserProfileHandler")
+
+STEP 1: Parse Path into Segments
+├── path = "/api/users/:id/profile"
+├── segments = ["api", "users", ":id", "profile"]
+└── Split by '/', remove empty strings
+
+STEP 2: Traverse/Create Trie Nodes
+├── current = root
+├── 
+├── Segment "api":
+│   ├── Exact match segment
+│   └── current = root.children.getOrPut("api") { TrieNode() }
+├── 
+├── Segment "users":
+│   ├── Exact match segment
+│   └── current = current.children.getOrPut("users") { TrieNode() }
+├── 
+├── Segment ":id":
+│   ├── Parameter segment (starts with ':')
+│   ├── IF current.paramChild == null:
+│   │   ├── current.paramChild = TrieNode()
+│   │   └── current.paramChild.paramName = "id"
+│   └── current = current.paramChild
+├── 
+├── Segment "profile":
+│   ├── Exact match segment
+│   └── current = current.children.getOrPut("profile") { TrieNode() }
+
+STEP 3: Mark End of Route
+├── current.isEndOfRoute = true
+├── current.result = "UserProfileHandler"
+└── This node represents a complete route
+
+TRIE STRUCTURE:
+        root
+          │
+        "api"
+          │
+       "users"
+        /    \
+     :id     "all"
+      │        │
+  "profile"  (end) → "AllUsersHandler"
+      │
+    (end) → "UserProfileHandler"
+```
+
+### `callRoute(url)` - Match URL to Handler
+
+```
+CALL: router.callRoute("/api/users/123/profile")
+
+STEP 1: Parse URL into Segments
+├── url = "/api/users/123/profile"
+└── segments = ["api", "users", "123", "profile"]
+
+STEP 2: Traverse Trie with Priority Matching
+├── current = root
+├── params = {}  // Extracted parameters
+├── 
+├── Segment "api":
+│   ├── Try exact match: root.children["api"] exists? YES
+│   └── current = children["api"]
+├── 
+├── Segment "users":
+│   ├── Try exact match: children["users"] exists? YES
+│   └── current = children["users"]
+├── 
+├── Segment "123":
+│   ├── PRIORITY ORDER:
+│   │   ├── 1. Exact match: children["123"]? NO
+│   │   ├── 2. Parameter: paramChild? YES
+│   │   │   ├── current = paramChild
+│   │   │   ├── params["id"] = "123"  // Extract value
+│   │   │   └── Continue
+│   │   └── 3. Wildcard: wildcardChild? (not checked, param matched)
+├── 
+├── Segment "profile":
+│   ├── Try exact match: children["profile"]? YES
+│   └── current = children["profile"]
+
+STEP 3: Check for Complete Route
+├── IF current.isEndOfRoute:
+│   └── Return RouteMatch(
+│           handler = "UserProfileHandler",
+│           params = {"id": "123"}
+│       )
+├── ELSE:
+│   └── Return null (no matching route)
+
+RESULT:
+├── Handler: "UserProfileHandler"
+└── Params: {id: "123"}
+```
+
+### Wildcard Matching Flow
+
+```
+ROUTES REGISTERED:
+├── /api/users/* → "CatchAllHandler"
+├── /api/users/:id → "UserHandler"
+├── /api/users/:id/profile → "ProfileHandler"
+
+CALL: router.callRoute("/api/users/anything-here")
+
+MATCHING PRIORITY:
+├── Try exact: children["anything-here"]? NO
+├── Try param: paramChild? YES → match ":id"
+├── Try wildcard: wildcardChild? YES → match "*"
+├── 
+├── PRIORITY: param wins over wildcard
+└── Result: UserHandler with params={id: "anything-here"}
+
+CALL: router.callRoute("/api/users/test/unknown/path")
+
+MATCHING:
+├── "api" → exact ✓
+├── "users" → exact ✓
+├── "test" → param ✓ (id=test)
+├── "unknown" → no exact, no param, no wildcard at this level
+└── Result: null (no match)
+
+CALL: router.callRoute("/static/images/logo.png")
+
+WITH ROUTE: /static/* → "StaticFileHandler"
+├── "static" → exact ✓
+├── "images" → wildcard (*) ✓
+├── But wait, * matches single segment!
+├── "logo.png" → no node
+└── Result: null
+
+WITH ROUTE: /static/** → "StaticFileHandler" (multi-segment wildcard)
+├── ** matches rest of path
+└── Result: StaticFileHandler
+```
+
+### Parameter Extraction Examples
+
+```
+ROUTE: /api/v:version/users/:userId/posts/:postId
+
+CALL: router.callRoute("/api/v2/users/alice/posts/42")
+
+EXTRACTION:
+├── ":version" matches "v2" → but wait, it's "/v:version"
+│   └── This means ":version" param is just "2" (after 'v')
+│       (depends on implementation)
+├── ":userId" matches "alice" → params["userId"] = "alice"
+├── ":postId" matches "42" → params["postId"] = "42"
+└── Result: params = {version: "2", userId: "alice", postId: "42"}
+
+ROUTE: /files/*filepath (capture rest of path)
+
+CALL: router.callRoute("/files/images/2024/01/photo.jpg")
+
+EXTRACTION:
+├── "*filepath" captures everything after /files/
+└── params = {filepath: "images/2024/01/photo.jpg"}
+```
+
+### Route Conflict Detection
+
+```
+SCENARIO: Overlapping routes
+
+router.addRoute("/users/:id", "Handler1")
+router.addRoute("/users/admin", "Handler2")
+
+CALL: router.callRoute("/users/admin")
+
+WITHOUT PRIORITY:
+├── Both routes could match
+├── Depends on traversal order
+└── AMBIGUOUS!
+
+WITH PRIORITY (correct implementation):
+├── "users" → exact ✓
+├── "admin" → Try exact first: children["admin"]? YES
+└── Result: Handler2 (exact match wins)
+
+CALL: router.callRoute("/users/bob")
+├── "admin" exact match? NO
+├── Param match? YES (:id = "bob")
+└── Result: Handler1
+
+RULE: Exact > Param > Wildcard
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

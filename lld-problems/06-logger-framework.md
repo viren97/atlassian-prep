@@ -187,6 +187,212 @@ Design a logging framework that supports multiple log levels, multiple output de
 
 ---
 
+## Code Flow Walkthrough
+
+### `log(level, message)` Step-by-Step
+
+```
+CALL: logger.info("User logged in: userId=123")
+
+STEP 1: Check Log Level
+├── IF level.ordinal < logger.level.ordinal:
+│   └── Return early (message filtered out)
+├── Level hierarchy: DEBUG < INFO < WARN < ERROR < FATAL
+├── Example: logger.level=WARN, message level=INFO
+│   └── INFO < WARN → message discarded
+└── Example: logger.level=INFO, message level=ERROR
+    └── ERROR > INFO → message proceeds
+
+STEP 2: Create Log Entry
+├── entry = LogEntry(
+│   │   timestamp = Instant.now(),
+│   │   level = INFO,
+│   │   message = "User logged in: userId=123",
+│   │   loggerName = "UserService",
+│   │   threadName = Thread.currentThread().name,
+│   │   throwable = null
+│   )
+└── Captures all context at log time
+
+STEP 3: Format the Entry
+├── formatter.format(entry):
+│   ├── SimpleFormatter:
+│   │   └── "[2024-01-15 10:30:45] [INFO] [UserService] User logged in: userId=123"
+│   ├── JsonFormatter:
+│   │   └── {"timestamp":"...","level":"INFO","logger":"UserService","message":"..."}
+│   └── PatternFormatter:
+│       └── Custom pattern: "%d{HH:mm:ss} %-5level %logger - %msg%n"
+
+STEP 4: Write to Sinks
+├── FOR each sink in sinks:
+│   ├── ConsoleSink:
+│   │   └── println(formatted)  // To stdout or stderr
+│   ├── FileSink:
+│   │   └── writer.write(formatted)  // To log file
+│   ├── AsyncSink:
+│   │   └── queue.offer(entry)  // Non-blocking queue
+│   └── Each sink writes independently
+```
+
+### AsyncSink: Non-Blocking Logging Flow
+
+```
+ARCHITECTURE:
+┌──────────────┐     ┌───────────────────┐     ┌──────────────┐
+│ Application  │────▶│ LinkedBlockingQueue │────▶│ Worker Thread │
+│   Thread     │     │   (bounded: 10000)  │     │  (daemon)      │
+└──────────────┘     └───────────────────┘     └───────┬──────┘
+                                                       │
+                                                       ▼
+                                              ┌──────────────┐
+                                              │ Delegate Sink │
+                                              │ (File/Console)│
+                                              └──────────────┘
+
+WRITE FLOW:
+├── CALL: asyncSink.write(entry)
+├── IF queue.offer(entry):  // Non-blocking add
+│   └── Return immediately (entry queued)
+├── ELSE (queue full - backpressure):
+│   └── delegate.write(entry)  // Fallback to sync write
+
+WORKER THREAD LOOP:
+├── WHILE running.get() OR !queue.isEmpty():
+│   ├── entry = queue.poll(100ms)  // Blocks up to 100ms
+│   ├── IF entry != null:
+│   │   └── delegate.write(entry)
+│   └── Check running flag periodically
+
+SHUTDOWN FLOW:
+├── running.set(false)
+├── workerThread.join(5000)  // Wait for queue drain
+└── delegate.close()
+```
+
+### FileSink with Log Rotation
+
+```
+SETUP: fileSink = FileSink("app.log", maxSize=10MB, maxFiles=5)
+
+WRITE FLOW:
+├── CALL: fileSink.write(entry)
+├── 
+├── STEP 1: Check Rotation Needed
+│   ├── IF currentFile.size() > maxSize:
+│   │   └── rotate()
+│   
+├── STEP 2: Rotate Files
+│   ├── rotate():
+│   │   ├── Close current writer
+│   │   ├── Rename files:
+│   │   │   ├── app.log.4 → DELETE (exceeds maxFiles)
+│   │   │   ├── app.log.3 → app.log.4
+│   │   │   ├── app.log.2 → app.log.3
+│   │   │   ├── app.log.1 → app.log.2
+│   │   │   └── app.log   → app.log.1
+│   │   └── Create new app.log writer
+│   
+├── STEP 3: Write Entry
+│   ├── writer.write(formatted)
+│   └── writer.flush()  // Ensure written to disk
+
+FILE STRUCTURE:
+├── app.log      (current, writing)
+├── app.log.1    (most recent rotated)
+├── app.log.2
+├── app.log.3
+└── app.log.4    (oldest, next to delete)
+```
+
+### Logger Hierarchy and Inheritance
+
+```
+SETUP:
+├── LoggerFactory.getLogger("com.app.service.UserService")
+└── Creates logger with name hierarchy
+
+HIERARCHY:
+├── ROOT (level=INFO)
+│   └── com (inherits from ROOT)
+│       └── com.app (inherits from com)
+│           └── com.app.service (level=DEBUG)
+│               └── com.app.service.UserService (inherits)
+
+LEVEL RESOLUTION:
+├── Logger "com.app.service.UserService" logs DEBUG
+├── Walk up hierarchy:
+│   ├── com.app.service.UserService → no level set
+│   ├── com.app.service → level=DEBUG ← Use this!
+│   └── (stop, found explicit level)
+├── DEBUG >= DEBUG → Log proceeds
+
+SINK INHERITANCE (Additive):
+├── ROOT: ConsoleSink
+├── com.app.service: FileSink("service.log")
+├── Logger "com.app.service.UserService":
+│   ├── Writes to: ConsoleSink (inherited from ROOT)
+│   └── Writes to: FileSink (from com.app.service)
+│   └── Same message goes to BOTH sinks
+```
+
+### Error Logging with Stack Trace
+
+```
+CALL: logger.error("Database connection failed", exception)
+
+STEP 1: Create Entry with Throwable
+├── entry = LogEntry(
+│   │   level = ERROR,
+│   │   message = "Database connection failed",
+│   │   throwable = exception  // SQLException
+│   )
+
+STEP 2: Format with Stack Trace
+├── formatter.format(entry):
+│   └── Output:
+│       [2024-01-15 10:30:45] [ERROR] [DbService] Database connection failed
+│       java.sql.SQLException: Connection refused
+│           at com.mysql.jdbc.Driver.connect(Driver.java:123)
+│           at com.app.db.DbService.getConnection(DbService.kt:45)
+│           at com.app.service.UserService.findUser(UserService.kt:23)
+│           ... 15 more
+
+STEP 3: Write to All Sinks
+├── Console: Shows full stack trace (may truncate in IDE)
+├── File: Stores complete stack trace
+└── Remote: Sends to log aggregation service
+```
+
+### MDC (Mapped Diagnostic Context) Flow
+
+```
+PURPOSE: Add context that follows a request across threads
+
+SETUP:
+├── // In web filter
+├── MDC.put("requestId", UUID.randomUUID().toString())
+├── MDC.put("userId", authenticatedUser.id)
+
+LOG CALLS:
+├── logger.info("Processing payment")
+│   └── Output: [req=abc-123] [user=456] Processing payment
+├── // In another class, same thread
+├── logger.info("Payment completed")
+│   └── Output: [req=abc-123] [user=456] Payment completed
+
+HOW IT WORKS:
+├── MDC uses ThreadLocal<Map<String, String>>
+├── Each thread has isolated context
+├── Formatter includes MDC values automatically
+
+CLEANUP:
+├── // After request completes
+├── MDC.clear()  // Remove all context
+└── Prevents memory leaks, context bleeding
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

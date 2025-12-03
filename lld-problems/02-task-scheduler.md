@@ -270,6 +270,186 @@ Design a Task Scheduler that can schedule and execute tasks at specified times. 
 
 ---
 
+## Code Flow Walkthrough
+
+### `schedule(task)` Step-by-Step
+
+```
+CALL: scheduler.schedule(task)
+
+STEP 1: Acquire Lock
+├── lock.withLock { ... }
+└── Prevents race conditions when modifying shared state
+
+STEP 2: Check Dependencies
+├── areDependenciesMet(task):
+│   ├── FOR each depId in task.dependencies:
+│   │   ├── Look up completedTasks[depId]
+│   │   └── IF not found OR not successful → return false
+│   └── Return true (all deps completed successfully)
+├── IF dependencies NOT met:
+│   └── task.status = WAITING_FOR_DEPENDENCY
+├── ELSE:
+│   └── task.status = SCHEDULED
+└── Example: Task C depends on [A, B] → waits until both complete
+
+STEP 3: Register Task
+├── taskRegistry[task.id] = task
+└── Enables lookup by ID for cancellation/status checks
+
+STEP 4: Add to Queue (if ready)
+├── IF task.status == SCHEDULED:
+│   ├── taskQueue.offer(task)  // PriorityBlockingQueue
+│   └── Task ordered by (executionTime, priority)
+└── ELSE: stays in registry, waiting for deps
+
+STEP 5: Notify Listeners
+├── listeners.forEach { it.onTaskScheduled(task) }
+└── Observer pattern: external code can react
+
+RETURN: task.id (for tracking/cancellation)
+```
+
+### `processQueue()` - Main Scheduler Loop
+
+```
+RUNS: Every 100ms via ScheduledExecutorService
+
+STEP 1: Check Running State
+├── IF !running.get():
+│   └── Return early (scheduler is shutting down)
+
+STEP 2: Check Waiting Tasks for Dependencies
+├── checkDependencies():
+│   ├── Filter tasks with status = WAITING_FOR_DEPENDENCY
+│   ├── FOR each waiting task:
+│   │   ├── IF areDependenciesMet(task):
+│   │   │   ├── task.status = SCHEDULED
+│   │   │   ├── Calculate nextExecutionTime
+│   │   │   └── taskQueue.offer(task)
+│   │   └── ELSE: keep waiting
+└── Promotes tasks whose deps are now complete
+
+STEP 3: Process Ready Tasks
+├── LOOP:
+│   ├── task = taskQueue.peek()  // Look at top without removing
+│   ├── IF task == null: break   // Queue empty
+│   ├── IF task.nextExecutionTime > now: break  // Not ready yet
+│   ├── taskQueue.poll()  // Remove from queue
+│   ├── IF task.status == CANCELLED: continue  // Skip cancelled
+│   └── executorService.submit { executeTask(task) }
+└── Submits all due tasks to thread pool
+
+TIMING EXAMPLE:
+├── Queue: [Task A @ 10:00, Task B @ 10:05, Task C @ 10:10]
+├── Now: 10:03
+├── Process: Task A (due), stop at Task B (not due)
+└── Task A runs in thread pool, B & C wait
+```
+
+### `executeTask(task)` Step-by-Step
+
+```
+RUNS IN: ExecutorService thread pool
+
+STEP 1: Execute via TaskExecutor
+├── result = taskExecutor.execute(task)
+│   ├── Notify listeners: onTaskStarted(task)
+│   ├── task.status = RUNNING
+│   ├── startTime = Instant.now()
+│   ├── TRY:
+│   │   ├── task.command()  // THE ACTUAL WORK
+│   │   ├── task.status = COMPLETED
+│   │   └── Return TaskResult(success=true, duration=...)
+│   ├── CATCH Exception:
+│   │   ├── task.status = FAILED
+│   │   ├── task.retryCount++
+│   │   └── Return TaskResult(success=false, error=e)
+│   └── Notify appropriate listener (completed/failed)
+
+STEP 2: Handle Result
+├── IF result.success:
+│   └── handleSuccessfulExecution(task)
+├── ELSE:
+│   └── handleFailedExecution(task, result)
+```
+
+### `handleSuccessfulExecution(task)` Flow
+
+```
+STEP 1: Record Completion
+├── completedTasks[task.id] = TaskResult(success=true, ...)
+└── Used for dependency checking
+
+STEP 2: Reschedule if Recurring
+├── IF task.schedule.isRecurring():
+│   ├── task.nextExecutionTime = schedule.getNextExecutionTime(now)
+│   ├── IF nextExecutionTime != null:
+│   │   ├── task.status = SCHEDULED
+│   │   ├── task.retryCount = 0  // Reset for next run
+│   │   └── taskQueue.offer(task)
+│   └── ELSE: task is done (no more occurrences)
+├── EXAMPLE (IntervalSchedule every 5 min):
+│   ├── Completed at 10:05
+│   ├── Next run calculated: 10:10
+│   └── Task re-added to queue for 10:10
+
+STEP 3: Unblock Dependent Tasks
+├── checkDependencies()
+└── Tasks waiting on this one can now run
+```
+
+### `handleFailedExecution(task, result)` - Retry Flow
+
+```
+STEP 1: Check Retry Budget
+├── IF task.retryCount < task.maxRetries:
+│   ├── // Still have retries left
+│   ├── retryDelay = retryStrategy.getNextRetryDelay(retryCount)
+│   │   ├── ExponentialBackoff: 1s → 2s → 4s → 8s...
+│   │   └── FixedDelay: always 5s
+│   ├── task.nextExecutionTime = now + retryDelay
+│   ├── task.status = SCHEDULED
+│   ├── taskQueue.offer(task)
+│   └── Log: "Retry 2/3 in 4000ms"
+├── ELSE (retries exhausted):
+│   ├── Log: "Failed after 3 retries"
+│   ├── completedTasks[task.id] = result  // Mark as failed
+│   └── task stays in FAILED status
+
+RETRY TIMELINE EXAMPLE:
+├── T=0:   Execute → FAIL (retry 1/3)
+├── T=1s:  Retry 1 → FAIL (retry 2/3)
+├── T=3s:  Retry 2 → FAIL (retry 3/3)
+├── T=7s:  Retry 3 → SUCCESS!
+└── If all failed: task.status = FAILED permanently
+```
+
+### `compareTo(other)` - Priority Queue Ordering
+
+```
+PURPOSE: Determine task execution order in PriorityQueue
+
+COMPARISON LOGIC:
+├── FIRST: Compare by nextExecutionTime (earlier wins)
+│   ├── this.time < other.time → return negative (this first)
+│   ├── this.time > other.time → return positive (other first)
+│   └── this.time == other.time → compare by priority
+├── SECOND: Compare by priority value (higher wins)
+│   ├── other.priority - this.priority  // Note: reversed!
+│   └── Higher value = higher priority = comes first
+
+EXAMPLE:
+├── Task A: time=10:00, priority=LOW(1)
+├── Task B: time=10:00, priority=HIGH(10)
+├── Task C: time=09:55, priority=LOW(1)
+├── Sorted order: [C, B, A]
+│   ├── C first (earliest time)
+│   └── B before A (same time, higher priority)
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

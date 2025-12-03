@@ -221,6 +221,200 @@ Design a parking lot system that can manage multiple floors, different vehicle t
 
 ---
 
+## Code Flow Walkthrough
+
+### `parkVehicle(vehicle)` Step-by-Step
+
+```
+CALL: parkingLot.parkVehicle(Car(licensePlate="ABC-123"))
+
+STEP 1: Find Compatible Spot Type
+├── vehicle.getCompatibleSpotTypes():
+│   ├── Car → [COMPACT, REGULAR, LARGE]
+│   ├── Motorcycle → [COMPACT, REGULAR, LARGE]
+│   ├── Truck → [LARGE]
+│   └── Electric → [ELECTRIC, REGULAR, LARGE]
+└── Returns list from smallest to largest (prefer exact fit)
+
+STEP 2: Search Floors for Available Spot
+├── FOR each floor in floors:
+│   ├── FOR each spotType in compatibleTypes:
+│   │   ├── spot = floor.findAvailableSpot(spotType):
+│   │   │   ├── lock.read { ... }
+│   │   │   ├── Filter spots: type matches AND isAvailable
+│   │   │   └── Return first available OR null
+│   │   ├── IF spot != null: break to Step 3
+│   │   └── CONTINUE searching
+│   └── CONTINUE to next floor
+├── IF no spot found:
+│   └── Return null (parking lot full for this vehicle type)
+
+STEP 3: Park Vehicle in Spot
+├── spot.park(vehicle):
+│   ├── lock.write { ... }  // Exclusive access
+│   ├── IF spot.vehicle != null: return false (race condition)
+│   ├── spot.vehicle = vehicle
+│   └── Return true
+├── IF park failed (another thread took it):
+│   └── Go back to Step 2, continue searching
+
+STEP 4: Generate Ticket
+├── ticket = ParkingTicket(
+│   │   ticketId = UUID,
+│   │   vehicleLicensePlate = "ABC-123",
+│   │   spotId = "F1-R23",
+│   │   floorNumber = 1,
+│   │   entryTime = now
+│   )
+├── activeTickets[ticketId] = ticket
+└── Return ticket
+
+EXAMPLE SEARCH:
+├── Car arrives, compatible: [COMPACT, REGULAR, LARGE]
+├── Floor 1: COMPACT spots full, check REGULAR
+├── Floor 1: REGULAR spot F1-R23 available!
+├── Park car in F1-R23
+└── Return ticket
+```
+
+### `unparkVehicle(ticket)` Step-by-Step
+
+```
+CALL: parkingLot.unparkVehicle(ticket)
+
+STEP 1: Validate Ticket
+├── IF !activeTickets.containsKey(ticket.ticketId):
+│   └── throw InvalidTicketException("Ticket not found or already used")
+
+STEP 2: Find the Spot
+├── floor = floors[ticket.floorNumber]
+├── spot = floor.getSpotById(ticket.spotId)
+└── IF spot == null: throw SpotNotFoundException
+
+STEP 3: Unpark Vehicle
+├── spot.unpark():
+│   ├── lock.write { ... }
+│   ├── vehicle = spot.vehicle
+│   ├── spot.vehicle = null
+│   └── Return vehicle (or null if already empty)
+
+STEP 4: Calculate Fee
+├── duration = Duration.between(ticket.entryTime, now)
+├── fee = pricingStrategy.calculateFee(vehicle.type, duration):
+│   ├── HourlyPricing:
+│   │   ├── hours = ceil(duration.toHours())
+│   │   ├── rate = rates[vehicleType]  // e.g., $5/hour for Car
+│   │   └── Return hours * rate
+│   ├── FlatRatePricing:
+│   │   └── Return flatRate per entry
+│   └── TieredPricing:
+│       ├── First 2 hours: $10
+│       ├── 2-6 hours: $5/hour
+│       └── 6+ hours: $25 flat
+
+STEP 5: Generate Receipt
+├── receipt = ParkingReceipt(
+│   │   ticketId = ticket.ticketId,
+│   │   entryTime = ticket.entryTime,
+│   │   exitTime = now,
+│   │   duration = duration,
+│   │   fee = fee
+│   )
+├── activeTickets.remove(ticket.ticketId)
+└── Return receipt
+
+FEE CALCULATION EXAMPLE:
+├── Entry: 10:00 AM
+├── Exit: 2:30 PM
+├── Duration: 4.5 hours → rounds to 5 hours
+├── Car rate: $5/hour
+├── Fee: 5 × $5 = $25
+```
+
+### `findAvailableSpot(spotType)` - Floor Level Search
+
+```
+CALL: floor.findAvailableSpot(SpotType.REGULAR)
+
+STEP 1: Acquire Read Lock
+├── lock.read { ... }
+└── Multiple threads can search simultaneously
+
+STEP 2: Filter Available Spots
+├── spots.filter { spot ->
+│   ├── spot.spotType == SpotType.REGULAR
+│   └── spot.isAvailable (vehicle == null)
+│ }
+└── Returns list of matching available spots
+
+STEP 3: Select Spot (Strategy)
+├── Default: Return first available (spots.firstOrNull())
+├── Alternative strategies:
+│   ├── Nearest to entrance
+│   ├── Nearest to elevator
+│   └── Load balancing across floor
+
+OPTIMIZATION:
+├── Instead of scanning all spots:
+│   ├── Maintain: availableSpotsByType[SpotType] = Set<Spot>
+│   ├── On park: remove from set
+│   ├── On unpark: add to set
+│   └── O(1) to check availability
+```
+
+### Electric Vehicle Charging Flow
+
+```
+CALL: parkingLot.parkVehicle(ElectricCar("EV-123"))
+
+STEP 1: Find Electric Spot (Preferred)
+├── Search for SpotType.ELECTRIC first
+├── Electric spots have charging capability
+└── IF available: park in ELECTRIC spot
+
+STEP 2: Fallback to Regular Spot
+├── IF no ELECTRIC spots:
+│   ├── Search REGULAR, then LARGE
+│   └── EV can park but won't charge
+
+STEP 3: Start Charging (if electric spot)
+├── IF spot.spotType == ELECTRIC:
+│   ├── spot.startCharging(vehicle):
+│   │   ├── chargingStation.connect(vehicle)
+│   │   └── Begin charging session
+│   └── Track charging in ticket
+
+STEP 4: On Unpark
+├── IF was charging:
+│   ├── spot.stopCharging()
+│   ├── Calculate charging fee
+│   └── Add to parking fee
+```
+
+### Concurrent Parking Handling
+
+```
+SCENARIO: Two cars arrive simultaneously, one REGULAR spot left
+
+THREAD 1: parkVehicle(CarA)     THREAD 2: parkVehicle(CarB)
+├── Find spot F1-R5             ├── Find spot F1-R5
+├── Try to park...              ├── Try to park...
+│   ├── lock.write              │   ├── wait for lock...
+│   ├── Check: vehicle==null ✓  │   │
+│   ├── Set: vehicle=CarA       │   │
+│   └── Return true             │   │
+├── Generate ticket             │   └── Acquires lock
+│                               │   ├── Check: vehicle==null ✗
+│                               │   └── Return false
+│                               ├── Back to search
+│                               ├── No more spots
+│                               └── Return null (lot full)
+
+KEY: The write lock ensures only one car gets the spot
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

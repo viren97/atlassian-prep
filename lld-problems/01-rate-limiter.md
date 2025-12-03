@@ -171,6 +171,182 @@ Design a Rate Limiter that can limit the number of requests a user/client can ma
 
 ---
 
+## Code Flow Walkthrough
+
+### Token Bucket: `isAllowed()` Step-by-Step
+
+```
+CALL: limiter.isAllowed("user-123")
+
+STEP 1: Acquire Lock
+├── lock.withLock { ... }
+├── Purpose: Ensure thread-safe access to bucket state
+└── Only one thread can modify bucket at a time
+
+STEP 2: Get or Create Bucket
+├── buckets.getOrPut("user-123") { Bucket(tokens=100, timestamp=now) }
+├── IF bucket exists → return existing bucket
+├── IF bucket doesn't exist → create new bucket with full capacity
+└── New users start with full token allowance (fair start)
+
+STEP 3: Lazy Token Refill
+├── Calculate elapsed time: elapsedSeconds = (now - lastRefill) / 1000.0
+├── Calculate tokens earned: tokensToAdd = elapsedSeconds * refillRate
+├── Example: 5 seconds × 10 tokens/sec = 50 tokens earned
+├── Update bucket: tokens = min(capacity, current + tokensToAdd)
+├── Cap at capacity to prevent unlimited accumulation
+└── Update timestamp for next calculation
+
+STEP 4: Check Token Availability
+├── IF tokens >= 1:
+│   ├── Consume: tokens -= 1
+│   ├── Return: RateLimitResult(allowed=true, remaining=tokens)
+│   └── Request proceeds to server
+├── ELSE (tokens < 1):
+│   ├── Calculate wait time: (1 - tokens) / refillRate * 1000
+│   ├── Example: Need 0.5 tokens, rate=10/sec → wait 50ms
+│   ├── Return: RateLimitResult(allowed=false, retryAfter=50)
+│   └── Client receives 429 Too Many Requests
+```
+
+### Sliding Window: `isAllowed()` Step-by-Step
+
+```
+CALL: limiter.isAllowed("user-123")
+CONFIG: maxRequests=100, windowSizeMs=60000 (1 minute)
+
+STEP 1: Acquire Lock
+├── lock.withLock { ... }
+└── Ensure atomic read-modify-write
+
+STEP 2: Calculate Window Boundaries
+├── now = System.currentTimeMillis()  // e.g., 1000060000
+├── windowStart = now - windowSizeMs   // e.g., 1000000000
+└── Only requests within [windowStart, now] count
+
+STEP 3: Get Request Timestamps
+├── timestamps = requestLogs.getOrPut("user-123") { mutableListOf() }
+└── List stores timestamp of each request from this client
+
+STEP 4: Clean Expired Timestamps
+├── timestamps.removeAll { it < windowStart }
+├── Example: [999990000, 1000010000, 1000050000]
+├── After cleanup: [1000010000, 1000050000]
+├── Time Complexity: O(k) where k = expired entries
+└── Memory freed for old requests
+
+STEP 5: Check Request Count
+├── IF timestamps.size < maxRequests:
+│   ├── timestamps.add(now)  // Record this request
+│   ├── remaining = maxRequests - timestamps.size
+│   └── Return: allowed=true
+├── ELSE (at limit):
+│   ├── Find oldest timestamp still in window
+│   ├── Calculate when it expires: oldest + windowSize - now
+│   └── Return: allowed=false, retryAfter=timeUntilOldestExpires
+```
+
+### Fixed Window: `isAllowed()` Step-by-Step
+
+```
+CALL: limiter.isAllowed("user-123")
+CONFIG: maxRequests=100, windowSizeMs=60000
+
+STEP 1: Determine Current Window
+├── now = System.currentTimeMillis()  // e.g., 1000065000
+├── currentWindow = now / windowSizeMs  // e.g., 16667 (window ID)
+└── All requests in same minute share same window ID
+
+STEP 2: Get or Reset Counter (Atomic Operation)
+├── counters.compute("user-123") { key, existing ->
+│   ├── existingWindow = existing?.windowStart / windowSizeMs
+│   ├── IF existing == null OR existingWindow != currentWindow:
+│   │   └── Create new: WindowCounter(windowStart=now, count=0)
+│   └── ELSE: return existing counter
+│ }
+└── Atomic: prevents race condition between read and write
+
+STEP 3: Increment and Check
+├── currentCount = counter.count.incrementAndGet()  // Atomic +1
+├── IF currentCount <= maxRequests:
+│   └── Return: allowed=true, remaining=(max - count)
+├── ELSE (over limit):
+│   ├── counter.count.decrementAndGet()  // Undo the increment
+│   ├── windowEnd = (currentWindow + 1) * windowSizeMs
+│   ├── retryAfter = windowEnd - now
+│   └── Return: allowed=false, retryAfter=timeUntilNextWindow
+```
+
+### Leaky Bucket: `isAllowed()` Step-by-Step
+
+```
+CALL: limiter.isAllowed("user-123")
+CONFIG: bucketCapacity=100, leakRate=10/sec
+
+CONCEPTUAL MODEL:
+- Bucket fills with "water" (requests)
+- Water leaks out at constant rate
+- If bucket overflows → reject request
+
+STEP 1: Acquire Lock
+└── lock.withLock { ... }
+
+STEP 2: Get or Create Bucket
+├── bucket = buckets.getOrPut("user-123") {
+│   LeakyBucket(waterLevel=0.0, lastLeakTimestamp=now)
+│ }
+└── New buckets start empty (unlike Token Bucket which starts full)
+
+STEP 3: Leak Water (Process Previous Requests)
+├── elapsedSeconds = (now - lastLeakTimestamp) / 1000.0
+├── leaked = elapsedSeconds * leakRate
+├── Example: 2 seconds × 10/sec = 20 units leaked
+├── waterLevel = max(0, waterLevel - leaked)
+├── Can't go below 0 (empty bucket)
+└── Update timestamp
+
+STEP 4: Try to Add Water (New Request)
+├── IF waterLevel < capacity:
+│   ├── waterLevel += 1  // Add this request
+│   ├── remaining = capacity - waterLevel
+│   └── Return: allowed=true
+├── ELSE (bucket full):
+│   ├── timeToLeak = (1 / leakRate) * 1000
+│   ├── Example: 1/10 = 100ms to process one request
+│   └── Return: allowed=false, retryAfter=100ms
+```
+
+### RateLimiterManager: Multi-Endpoint Flow
+
+```
+SETUP:
+manager.registerEndpoint("/api/search", SLIDING_WINDOW, config1)
+manager.registerEndpoint("/api/upload", TOKEN_BUCKET, config2)
+
+CALL: manager.isAllowed("user-123", "/api/search")
+
+STEP 1: Lookup Endpoint Limiter
+├── limiter = endpointLimiters["/api/search"]
+├── IF limiter == null:
+│   └── throw IllegalArgumentException("Endpoint not registered")
+└── Each endpoint has its own rate limiter instance
+
+STEP 2: Create Composite Key
+├── key = "user-123:/api/search"
+└── Same user has separate limits per endpoint
+
+STEP 3: Delegate to Limiter
+├── result = limiter.isAllowed(key)
+└── Returns RateLimitResult from specific algorithm
+
+RESULT:
+- User can hit /api/search 100 times/min (sliding window)
+- User can hit /api/upload 10 times (token bucket)
+- Limits are independent per endpoint
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

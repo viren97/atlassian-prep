@@ -5,6 +5,198 @@ Design an elevator system for a building with multiple elevators serving multipl
 
 ---
 
+## Code Flow Walkthrough
+
+### `requestElevator(floor, direction)` - External Request
+
+```
+CALL: system.requestElevator(floor=5, direction=UP)
+(Person at floor 5 wants to go up)
+
+STEP 1: Create Request
+├── request = ElevatorRequest(
+│   │   sourceFloor = 5,
+│   │   direction = UP,
+│   │   timestamp = now
+│   )
+
+STEP 2: Dispatch to Best Elevator
+├── elevator = dispatcher.dispatch(request, elevators)
+│   ├── 
+│   ├── // NearestElevatorDispatcher:
+│   │   └── Return elevator closest to floor 5
+│   ├── 
+│   ├── // LOOKDispatcher (smarter):
+│   │   ├── Priority 1: Elevator going UP, below floor 5
+│   │   │   └── Will pass floor 5 on its way
+│   │   ├── Priority 2: Idle elevator nearest to floor 5
+│   │   │   └── Can respond quickly
+│   │   └── Priority 3: Least loaded elevator
+│   │       └── Balance load
+│   ├── 
+│   └── Returns: Elevator #2 (going UP from floor 3)
+
+STEP 3: Add Destination to Elevator
+├── elevator.addDestination(floor=5)
+│   ├── destinationFloors.add(5)  // TreeSet, sorted
+│   └── Elevator will stop at floor 5
+
+STEP 4: Return Assigned Elevator
+└── Return elevator #2
+
+ELEVATOR STATE:
+├── Before: destinations=[7, 10], floor=3, going UP
+├── After:  destinations=[5, 7, 10], floor=3, going UP
+└── Will stop at: 5 (pickup), 7, 10
+```
+
+### `elevator.move()` - Elevator Movement Cycle
+
+```
+RUNS: Continuously in elevator's thread
+
+LOOP:
+├── STEP 1: Check Destinations
+│   ├── IF destinationFloors.isEmpty():
+│   │   ├── direction = IDLE
+│   │   └── Wait for new request
+│   └── ELSE: proceed to move
+
+├── STEP 2: Determine Direction
+│   ├── IF any destination > currentFloor AND direction != DOWN:
+│   │   └── direction = UP
+│   ├── ELSE IF any destination < currentFloor AND direction != UP:
+│   │   └── direction = DOWN
+│   └── ELSE:
+│       └── Reverse direction (end of run)
+
+├── STEP 3: Move One Floor
+│   ├── IF direction == UP:
+│   │   └── currentFloor++
+│   ├── ELSE IF direction == DOWN:
+│   │   └── currentFloor--
+│   ├── state = MOVING
+│   └── Thread.sleep(floorTravelTime)  // Simulate travel
+
+├── STEP 4: Check If Should Stop
+│   ├── shouldStop = destinationFloors.contains(currentFloor)
+│   ├── // Or using LOOK algorithm:
+│   │   └── shouldStop = hasRequestAtCurrentFloor()
+│   ├── IF shouldStop:
+│   │   ├── openDoors()
+│   │   ├── Thread.sleep(doorOpenTime)
+│   │   ├── destinationFloors.remove(currentFloor)
+│   │   └── closeDoors()
+
+└── REPEAT loop
+
+EXAMPLE TIMELINE:
+├── T=0:  Floor 3, destinations=[5,7,10], UP
+├── T=1:  Floor 4, no stop
+├── T=2:  Floor 5, STOP (pickup passenger)
+├── T=3:  Doors open/close
+├── T=4:  Floor 6, no stop
+├── T=5:  Floor 7, STOP (drop passenger)
+├── ...
+```
+
+### LOOK Algorithm Dispatch Logic
+
+```
+SCENARIO: Request at floor 8, direction UP
+Elevators:
+├── E1: floor=3, direction=UP, destinations=[5,10]
+├── E2: floor=12, direction=DOWN, destinations=[6]
+├── E3: floor=8, direction=IDLE
+├── E4: floor=7, direction=UP, destinations=[15]
+
+STEP 1: Check "Moving Towards" (Priority 1)
+├── E1: floor=3 < 8, going UP, request is UP
+│   └── Will pass floor 8 → CANDIDATE ✓
+├── E2: floor=12 > 8, going DOWN
+│   └── Wrong direction, won't stop for UP request
+├── E4: floor=7 < 8, going UP, request is UP
+│   └── Will pass floor 8 → CANDIDATE ✓
+
+STEP 2: Select Best from Candidates
+├── E1: distance = 8 - 3 = 5 floors
+├── E4: distance = 8 - 7 = 1 floor
+└── Winner: E4 (closer)
+
+STEP 3: If No "Moving Towards" Candidates
+├── Check idle elevators (Priority 2)
+│   ├── E3: floor=8, IDLE
+│   └── Nearest idle → E3
+
+STEP 4: Fallback
+├── All else equal → least loaded elevator
+└── Balance across elevators
+
+RESULT:
+├── E4 is assigned (1 floor away, already going UP)
+├── E4 will stop at 8 before continuing to 15
+└── Passenger picked up efficiently
+```
+
+### Internal Request (Inside Elevator)
+
+```
+CALL: elevator.selectFloor(12)
+(Passenger inside elevator presses floor 12)
+
+STEP 1: Validate Floor
+├── IF floor < 0 OR floor > maxFloor:
+│   └── Ignore invalid request
+├── IF floor == currentFloor:
+│   └── Already here, open doors
+
+STEP 2: Add to Destinations
+├── destinationFloors.add(12)  // TreeSet for sorted order
+└── Elevator will visit floor 12
+
+STEP 3: Optimize Order (automatic via TreeSet)
+├── Before: destinations=[5, 10], currentFloor=3, UP
+├── After:  destinations=[5, 10, 12]
+└── Will visit in order: 5, 10, 12 (UP direction)
+
+REVERSE DIRECTION SCENARIO:
+├── currentFloor=8, direction=UP, destinations=[10]
+├── Passenger presses 3
+├── destinations=[3, 10]
+├── Continue UP to 10 first (LOOK algorithm)
+├── Then reverse to DOWN, go to 3
+└── No zigzag: complete one direction first
+```
+
+### Maintenance Mode Flow
+
+```
+CALL: elevator.setMaintenance(true)
+
+STEP 1: Update State
+├── state = MAINTENANCE
+├── // Stop accepting new requests
+
+STEP 2: Complete Current Trip (graceful)
+├── IF destinationFloors.isNotEmpty():
+│   ├── Continue to next destination
+│   ├── Let passengers off
+│   └── Then enter full maintenance
+
+STEP 3: Dispatcher Excludes
+├── dispatcher.dispatch(request, elevators):
+│   ├── Filter: elevators.filter { it.state != MAINTENANCE }
+│   └── Maintenance elevator not assigned
+
+EMERGENCY STOP:
+├── CALL: elevator.emergencyStop()
+├── state = STOPPED
+├── Open doors immediately
+└── Sound alarm
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

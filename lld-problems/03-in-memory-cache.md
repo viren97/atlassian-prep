@@ -188,6 +188,214 @@ Design an in-memory cache system with support for different eviction policies (L
 
 ---
 
+## Code Flow Walkthrough
+
+### LRU Cache: `get(key)` Step-by-Step
+
+```
+CALL: cache.get("user-123")
+
+STEP 1: Acquire Write Lock
+├── lock.write { ... }
+├── Why write lock? We modify access order on every get
+└── Prevents concurrent modification of linked list
+
+STEP 2: HashMap Lookup
+├── nodeEntry = cache["user-123"]  // O(1)
+├── IF nodeEntry == null:
+│   ├── misses++
+│   └── Return null  // CACHE MISS
+
+STEP 3: Check TTL Expiration
+├── IF nodeEntry.entry.isExpired():
+│   ├── isExpired() = expiresAt?.isBefore(now) ?: false
+│   ├── removeInternal("user-123")  // Evict expired entry
+│   ├── misses++
+│   └── Return null  // CACHE MISS (expired)
+
+STEP 4: Update LRU Order (Move to Front)
+├── accessOrder.moveToFirst(nodeEntry.node)
+│   ├── Remove node from current position:
+│   │   ├── prev.next = node.next
+│   │   └── next.prev = node.prev
+│   ├── Insert at head:
+│   │   ├── node.prev = head
+│   │   ├── node.next = head.next
+│   │   ├── head.next.prev = node
+│   │   └── head.next = node
+│   └── All O(1) operations!
+├── entry.updateAccess()  // Update lastAccessedAt
+
+STEP 5: Return Value
+├── hits++
+└── Return nodeEntry.entry.value  // CACHE HIT
+
+VISUAL BEFORE/AFTER:
+├── Before get("B"): HEAD ↔ A ↔ B ↔ C ↔ TAIL
+├── After get("B"):  HEAD ↔ B ↔ A ↔ C ↔ TAIL
+└── B is now most recently used
+```
+
+### LRU Cache: `put(key, value)` Step-by-Step
+
+```
+CALL: cache.put("new-key", "new-value", ttl=5.minutes)
+
+STEP 1: Acquire Write Lock
+└── lock.write { ... }
+
+STEP 2: Check if Key Exists (Update Case)
+├── IF cache["new-key"] exists:
+│   ├── Remove old node from linked list
+│   └── Continue to add new entry (effectively an update)
+
+STEP 3: Evict if at Capacity
+├── WHILE cache.size >= maxSize:
+│   ├── evict():
+│   │   ├── keyToRemove = accessOrder.removeLast()  // Get LRU key
+│   │   │   ├── lastNode = tail.prev
+│   │   │   ├── Remove lastNode from list
+│   │   │   └── Return lastNode.key
+│   │   ├── cache.remove(keyToRemove)  // Remove from HashMap
+│   │   └── evictions++
+│   └── Repeat until under capacity
+
+STEP 4: Add New Entry
+├── node = accessOrder.addFirst("new-key")  // Add to head
+│   ├── Create new node
+│   ├── Insert between head and head.next
+│   └── O(1) insertion
+├── entry = CacheEntry(value, expiresAt=now+ttl)
+├── cache["new-key"] = NodeEntry(node, entry)
+└── Entry is now most recently used
+
+VISUAL EXAMPLE (maxSize=3):
+├── Before: HEAD ↔ A ↔ B ↔ C ↔ TAIL, cache={A,B,C}
+├── put("D", val):
+│   ├── Evict C (LRU): cache={A,B}
+│   └── Add D at front: cache={D,A,B}
+├── After:  HEAD ↔ D ↔ A ↔ B ↔ TAIL
+```
+
+### LFU Cache: `get(key)` Step-by-Step
+
+```
+CALL: cache.get("user-123")
+
+STEP 1: Acquire Write Lock
+└── lock.write { ... }
+
+STEP 2: HashMap Lookup
+├── entry = cache["user-123"]
+├── IF entry == null:
+│   ├── misses++
+│   └── Return null
+
+STEP 3: Check TTL
+├── IF entry.isExpired():
+│   ├── removeInternal("user-123")
+│   └── Return null
+
+STEP 4: Update Frequency (THE KEY DIFFERENCE FROM LRU)
+├── updateFrequency("user-123"):
+│   ├── currentFreq = keyFrequency["user-123"]  // e.g., 2
+│   ├── newFreq = currentFreq + 1  // → 3
+│   ├── 
+│   ├── // Remove from current frequency bucket
+│   ├── frequencyBuckets[2].remove("user-123")
+│   ├── 
+│   ├── // Update minFrequency if needed
+│   ├── IF currentFreq == minFrequency AND bucket[2].isEmpty():
+│   │   └── minFrequency = newFreq  // 2 → 3
+│   ├── 
+│   ├── // Add to new frequency bucket
+│   ├── keyFrequency["user-123"] = 3
+│   └── frequencyBuckets[3].add("user-123")
+
+STEP 5: Return Value
+├── hits++
+└── Return entry.value
+
+VISUAL EXAMPLE:
+├── Before get("B"):
+│   ├── keyFrequency: {A:3, B:2, C:1}
+│   ├── buckets: {1:[C], 2:[B], 3:[A]}
+│   └── minFrequency = 1
+├── After get("B"):
+│   ├── keyFrequency: {A:3, B:3, C:1}
+│   ├── buckets: {1:[C], 2:[], 3:[A,B]}
+│   └── minFrequency = 1 (unchanged, bucket[1] not empty)
+```
+
+### LFU Cache: `evict()` Step-by-Step
+
+```
+CALLED WHEN: cache.size >= maxSize during put()
+
+STEP 1: Get Minimum Frequency Bucket
+├── minBucket = frequencyBuckets[minFrequency]
+├── Example: minFrequency=1, bucket[1]=[D, E] (insertion order)
+└── LinkedHashSet preserves insertion order (FIFO within freq)
+
+STEP 2: Get Oldest Key in Min Bucket
+├── keyToEvict = minBucket.firstOrNull()  // "D" (oldest)
+└── Among least-frequently used, evict oldest
+
+STEP 3: Remove from All Data Structures
+├── minBucket.remove("D")
+├── cache.remove("D")
+├── keyFrequency.remove("D")
+└── evictions++
+
+WHY LinkedHashSet?
+├── Set: O(1) add/remove
+├── LinkedHash: preserves insertion order
+└── When freq tied, FIFO breaks the tie
+
+EVICTION EXAMPLE:
+├── cache: {A:val, B:val, C:val, D:val, E:val}, maxSize=5
+├── frequencies: {A:5, B:3, C:3, D:1, E:1}
+├── buckets: {1:[D,E], 3:[B,C], 5:[A]}
+├── put("F", val) triggers evict()
+├── Evict D (freq=1, oldest in bucket[1])
+└── Result: {A:val, B:val, C:val, E:val, F:val}
+```
+
+### Loading Cache: `get(key)` with Auto-Load
+
+```
+CALL: userCache.get(123)  // User ID
+
+STEP 1: Try Cache First
+├── cached = delegate.get(123)
+├── IF cached != null:
+│   └── Return cached  // Fast path: cache hit
+
+STEP 2: Acquire Write Lock (Load Path)
+├── lock.write { ... }
+└── Prevents multiple threads loading same key
+
+STEP 3: Double-Check (After Lock)
+├── delegate.get(123)  // Check again under lock
+├── IF found now:
+│   └── Return it (another thread loaded it)
+└── Prevents duplicate loads in race condition
+
+STEP 4: Load from Source
+├── loaded = loader(123)
+│   ├── Example: "Loading user 123 from database..."
+│   └── Return: "User-123"
+├── delegate.put(123, loaded)
+└── Return loaded
+
+FLOW:
+├── Thread 1: get(123) → miss → acquire lock → load → put → return
+├── Thread 2: get(123) → miss → wait for lock → acquire → found! → return
+└── Database only called once
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

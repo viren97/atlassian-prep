@@ -13,6 +13,219 @@ Design the classic Snake game where the snake moves on a 2D board, grows when ea
 
 ---
 
+## Code Flow Walkthrough
+
+### `move(direction)` - Snake Movement
+
+```
+CALL: snake.move(Direction.RIGHT)
+
+STEP 1: Validate Direction (Prevent 180°)
+├── currentDirection = RIGHT
+├── newDirection = RIGHT
+├── IF newDirection == currentDirection.opposite():
+│   ├── Example: Going RIGHT, can't go LEFT
+│   └── Ignore input, continue current direction
+└── Valid directions when going RIGHT: UP, DOWN, RIGHT
+
+STEP 2: Calculate New Head Position
+├── currentHead = body.first()  // e.g., Position(5, 5)
+├── newHead = currentHead.move(direction)
+│   ├── RIGHT: Position(6, 5)  // x+1
+│   ├── LEFT:  Position(4, 5)  // x-1
+│   ├── UP:    Position(5, 4)  // y-1
+│   └── DOWN:  Position(5, 6)  // y+1
+└── newHead = Position(6, 5)
+
+STEP 3: Check Collisions
+├── // Wall collision
+├── IF newHead.x < 0 OR newHead.x >= width:
+│   └── Return MoveResult(GAME_OVER, "Hit wall")
+├── IF newHead.y < 0 OR newHead.y >= height:
+│   └── Return MoveResult(GAME_OVER, "Hit wall")
+├── 
+├── // Self collision (excluding tail if not growing)
+├── IF bodySet.contains(newHead):
+│   ├── // Special case: tail will move away
+│   ├── IF newHead == body.last() AND NOT growing:
+│   │   └── OK (tail moves, spot becomes free)
+│   └── ELSE:
+│       └── Return MoveResult(GAME_OVER, "Hit self")
+
+STEP 4: Check Food Collision
+├── IF newHead == food.position:
+│   ├── growing = true  // Don't remove tail this move
+│   ├── score += food.value
+│   ├── spawnNewFood()
+│   └── // Snake grows by 1
+
+STEP 5: Update Body
+├── // Add new head
+├── body.addFirst(newHead)
+├── bodySet.add(newHead)
+├── 
+├── // Remove tail (unless growing)
+├── IF NOT growing:
+│   ├── oldTail = body.removeLast()
+│   └── bodySet.remove(oldTail)
+├── ELSE:
+│   └── growing = false  // Growth applied
+
+STEP 6: Return Result
+└── Return MoveResult(
+        status = ALIVE,
+        newHead = Position(6, 5),
+        ate = true/false,
+        score = 50
+    )
+
+VISUAL:
+Before: [H][@][@][@][T]      (H=head, T=tail, @=body)
+        Position: [(5,5), (4,5), (3,5), (2,5), (1,5)]
+
+Move RIGHT (no food):
+After:  [H][@][@][@][T]
+        Position: [(6,5), (5,5), (4,5), (3,5), (2,5)]
+        Old tail (1,5) removed, new head (6,5) added
+
+Move RIGHT (ate food):
+After:  [H][@][@][@][@][T]    (snake grew!)
+        Position: [(6,5), (5,5), (4,5), (3,5), (2,5), (1,5)]
+        No tail removed, new head added
+```
+
+### Self-Collision Detection
+
+```
+BODY DATA STRUCTURES:
+├── body: Deque<Position> = [(5,5), (4,5), (3,5), (2,5)]  // head→tail
+├── bodySet: Set<Position> = {(5,5), (4,5), (3,5), (2,5)} // O(1) lookup
+
+CHECK COLLISION:
+├── newHead = Position(3, 5)  // Moving left into own body
+├── bodySet.contains((3,5))? YES
+├── Is (3,5) the tail? body.last() = (2,5), NO
+└── COLLISION! Game Over
+
+EDGE CASE - Head meets where tail WAS:
+├── Snake moving RIGHT
+├── body = [(5,5), (4,5), (3,5), (2,5)]
+├── newHead = (6,5)
+├── After move, tail (2,5) will be removed
+├── 
+├── Now snake moves DOWN:
+├── newHead = (6,6)
+├── body after = [(6,5), (5,5), (4,5), (3,5)]
+├── (2,5) is no longer in body
+├── 
+├── If snake later reaches (2,5):
+└── No collision (position is free now)
+```
+
+### Food Spawning Algorithm
+
+```
+CALL: game.spawnFood()
+
+STEP 1: Get All Available Positions
+├── allPositions = grid (10×10 = 100 positions)
+├── occupiedPositions = snake.bodySet (e.g., 5 positions)
+└── availablePositions = allPositions - occupiedPositions
+
+STEP 2: Random Selection
+├── IF availablePositions.isEmpty():
+│   └── Return null (snake fills board = WIN!)
+├── foodPosition = availablePositions.random()
+└── Example: Position(7, 3)
+
+STEP 3: Create Food
+├── food = Food(
+│   │   position = Position(7, 3),
+│   │   value = 10  // Points for eating
+│   )
+└── Place on board
+
+OPTIMIZATION (for large boards):
+├── Instead of calculating all free positions:
+├── DO:
+│   ├── randomPos = Position(random(width), random(height))
+├── WHILE bodySet.contains(randomPos)
+└── Efficient when snake is small relative to board
+```
+
+### Game Loop Flow
+
+```
+MAIN GAME LOOP:
+
+WHILE game.status == RUNNING:
+    ├── 
+    ├── STEP 1: Get Input
+    │   ├── direction = inputQueue.poll() ?: snake.currentDirection
+    │   └── Use last direction if no new input
+    ├── 
+    ├── STEP 2: Move Snake
+    │   ├── result = snake.move(direction)
+    │   ├── IF result.status == GAME_OVER:
+    │   │   └── game.status = GAME_OVER
+    │   └── CONTINUE
+    ├── 
+    ├── STEP 3: Check Win Condition
+    │   ├── IF snake.length == boardSize:
+    │   │   └── game.status = WON  // Filled entire board
+    ├── 
+    ├── STEP 4: Update Score
+    │   ├── IF result.ate:
+    │   │   └── score += food.value
+    ├── 
+    ├── STEP 5: Render
+    │   ├── renderer.clear()
+    │   ├── renderer.drawSnake(snake)
+    │   ├── renderer.drawFood(food)
+    │   ├── renderer.drawScore(score)
+    │   └── renderer.present()
+    ├── 
+    └── STEP 6: Wait for Next Frame
+        └── Thread.sleep(gameSpeed)  // e.g., 100ms
+
+GAME SPEED PROGRESSION:
+├── Initial: 200ms per move (slow)
+├── Every 5 food eaten: speed -= 20ms
+├── Minimum: 50ms per move (fast)
+└── Increases difficulty as snake grows
+```
+
+### Direction Queue (Handling Fast Input)
+
+```
+PROBLEM: User presses RIGHT then DOWN very fast
+
+WITHOUT QUEUE:
+├── Frame 1: Process RIGHT (ok)
+├── Frame 2: Process DOWN (ok)
+├── But if both inputs arrive in same frame:
+│   ├── Last input wins: DOWN
+│   └── RIGHT input lost!
+
+WITH INPUT QUEUE:
+├── inputQueue = [RIGHT, DOWN]
+├── Frame 1: poll() → RIGHT, process RIGHT
+├── Frame 2: poll() → DOWN, process DOWN
+└── All inputs processed in order
+
+PREVENTING 180° VIA QUEUE:
+├── inputQueue = [UP, DOWN]  // Invalid: UP then immediate DOWN
+├── Frame 1: direction=RIGHT (current)
+├── poll() → UP: valid (not opposite of RIGHT)
+├── Process UP, now direction=UP
+├── Frame 2: 
+├── poll() → DOWN: INVALID (opposite of UP)
+├── Ignore or skip
+└── Snake continues UP
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

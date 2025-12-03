@@ -5,6 +5,205 @@ Design a CostExplorer for a payment system that calculates the total cost a cust
 
 ---
 
+## Code Flow Walkthrough
+
+### `getBillForMonth(yearMonth)` - Monthly Bill Calculation
+
+```
+CALL: explorer.getBillForMonth(YearMonth.of(2024, JANUARY))
+
+STEP 1: Find Active Subscriptions
+├── FOR each subscription in subscriptions:
+│   ├── isActiveInMonth = subscription.startDate <= Jan31 AND
+│   │                     (subscription.endDate == null OR endDate >= Jan1)
+│   ├── 
+│   ├── Subscription A: Jira, started Dec15, no end → ACTIVE
+│   ├── Subscription B: Confluence, started Feb1 → NOT ACTIVE (future)
+│   └── Subscription C: Bitbucket, ended Dec31 → NOT ACTIVE (past)
+├── 
+└── activeSubscriptions = [Subscription A]
+
+STEP 2: Calculate Cost for Each Subscription
+├── FOR each active subscription:
+│   ├── 
+│   ├── // Get pricing plan
+│   ├── plan = pricingPlans[(Jira, STANDARD)]
+│   ├── basePrice = plan.pricePerUser * subscription.userCount
+│   ├── Example: $10/user × 50 users = $500
+│   ├── 
+│   ├── // Apply proration if partial month
+│   ├── IF subscription.startDate > Jan1:
+│   │   ├── daysInMonth = 31
+│   │   ├── activeDays = 31 - 14 = 17 (started Jan15)
+│   │   ├── prorationFactor = 17/31 = 0.548
+│   │   └── proratedAmount = $500 × 0.548 = $274
+│   ├── 
+│   ├── // Add additional charges
+│   ├── storageCharge = calculateStorageOverage(subscription)
+│   ├── apiCharge = calculateAPIOverage(subscription)
+│   └── lineItem = LineItem(
+│           product = Jira,
+│           baseAmount = $274,
+│           storageCharge = $50,
+│           apiCharge = $0,
+│           total = $324
+│       )
+
+STEP 3: Apply Discounts
+├── FOR each discount in discounts:
+│   ├── IF discount.isApplicable(subscription, month):
+│   │   ├── // Percentage discount
+│   │   ├── IF discount.type == PERCENTAGE:
+│   │   │   └── amount = total × (discount.percent / 100)
+│   │   ├── // Fixed discount
+│   │   ├── ELSE IF discount.type == FIXED:
+│   │   │   └── amount = discount.amount
+│   │   └── Apply to line item
+│   └── 
+├── Example: 10% annual commitment discount
+└── discountAmount = $324 × 0.10 = $32.40
+
+STEP 4: Generate Bill
+└── Bill(
+        yearMonth = Jan2024,
+        lineItems = [LineItem(Jira, $324)],
+        subtotal = $324,
+        discounts = [Discount("Annual", -$32.40)],
+        total = $291.60
+    )
+```
+
+### Proration Calculation
+
+```
+SCENARIO: Subscription starts mid-month
+
+Subscription: Confluence PREMIUM
+├── Start Date: January 15, 2024
+├── User Count: 100
+├── Price: $20/user/month = $2000/month
+
+PRORATION FOR JANUARY:
+├── Total days in January: 31
+├── Active days: Jan 15-31 = 17 days
+├── Proration factor: 17/31 = 0.5484
+├── Prorated amount: $2000 × 0.5484 = $1096.77
+
+PRORATION FOR SUBSCRIPTION END:
+├── End Date: March 20, 2024
+├── Active days in March: 1-20 = 20 days
+├── Proration factor: 20/31 = 0.6452
+├── Prorated amount: $2000 × 0.6452 = $1290.32
+
+FULL MONTH (FEBRUARY):
+├── No proration needed
+├── Full amount: $2000
+
+TIMELINE:
+├── Jan: $1096.77 (prorated start)
+├── Feb: $2000.00 (full month)
+├── Mar: $1290.32 (prorated end)
+└── Total: $4387.09
+```
+
+### `getYearlyEstimate()` - Annual Projection
+
+```
+CALL: explorer.getYearlyEstimate(fromMonth=Jan2024)
+
+STEP 1: Calculate Known Months
+├── FOR month in [Jan, Feb, Mar] (past/current):
+│   ├── bill = getBillForMonth(month)
+│   └── knownCosts.add(bill.total)
+├── 
+├── Jan: $1500
+├── Feb: $1650
+├── Mar: $1600
+└── knownTotal = $4750
+
+STEP 2: Project Future Months
+├── FOR month in [Apr, May, ..., Dec] (future):
+│   ├── 
+│   ├── // Use current subscriptions
+│   ├── activeSubscriptions = getCurrentSubscriptions()
+│   ├── 
+│   ├── // Project cost (no proration for full months)
+│   ├── monthlyProjection = SUM(subscription.monthlyRate)
+│   ├── 
+│   ├── // Apply known discounts
+│   ├── discountedProjection = applyDiscounts(monthlyProjection)
+│   └── 
+├── 
+├── Projected monthly: $1600
+└── projectedTotal = 9 months × $1600 = $14,400
+
+STEP 3: Account for Changes
+├── // Pending subscription changes
+├── IF pendingUpgrade(startDate=Jun1):
+│   ├── Months Jun-Dec affected
+│   └── Adjust projection: +$200/month × 7 = +$1400
+├── 
+├── IF pendingDowngrade(startDate=Sep1):
+│   └── Adjust: -$100/month × 4 = -$400
+
+STEP 4: Generate Estimate
+└── YearlyEstimate(
+        knownCosts = $4,750,
+        projectedCosts = $14,400,
+        adjustments = +$1,000,
+        totalEstimate = $20,150,
+        confidence = "Medium" // due to projections
+    )
+```
+
+### Discount Application Logic
+
+```
+DISCOUNT TYPES:
+
+1. PERCENTAGE DISCOUNT:
+├── Input: 20% off Jira
+├── baseAmount = $500
+├── discountAmount = $500 × 0.20 = $100
+└── finalAmount = $400
+
+2. FIXED AMOUNT DISCOUNT:
+├── Input: $50 off total
+├── baseAmount = $500
+├── discountAmount = $50
+└── finalAmount = $450
+
+3. TIERED DISCOUNT:
+├── Input: 
+│   ├── 1-10 users: 0% off
+│   ├── 11-50 users: 10% off
+│   └── 51+ users: 20% off
+├── 75 users at $10/user = $750 base
+├── Tier: 51+ → 20% off
+├── discountAmount = $750 × 0.20 = $150
+└── finalAmount = $600
+
+4. COMMITMENT DISCOUNT:
+├── Input: 15% off for annual commitment
+├── Applies if: subscription.commitment == ANNUAL
+├── baseAmount = $500/month × 12 = $6000/year
+├── discountAmount = $6000 × 0.15 = $900
+└── Annual cost = $5100
+
+DISCOUNT STACKING:
+├── Volume discount: -10%
+├── Annual commitment: -15%
+├── Promo code: -$50
+├── 
+├── baseAmount = $1000
+├── After volume: $1000 × 0.90 = $900
+├── After annual: $900 × 0.85 = $765
+├── After promo: $765 - $50 = $715
+└── Note: percentage discounts compound, fixed applied last
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements

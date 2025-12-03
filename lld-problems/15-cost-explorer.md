@@ -1,0 +1,553 @@
+# Cost Explorer - LLD
+
+## Problem Statement
+Design a CostExplorer for a payment system that calculates the total cost a customer has to pay in a unit year. The system should be able to provide monthly and yearly cost estimates at any day of the year.
+
+---
+
+## Requirements
+
+### Functional Requirements
+1. Generate monthly bills (including future months for the unit year)
+2. Calculate yearly cost estimates
+3. Support different subscription tiers/plans
+4. Handle prorated charges
+5. Apply discounts and promotions
+6. Support multiple products (Jira, Confluence, etc.)
+
+### Non-Functional Requirements
+1. Thread-safe calculations
+2. Accurate prorating
+3. Extensible pricing models
+
+---
+
+## Class Diagram
+
+```
+┌─────────────────────────────────────────┐
+│           Subscription                   │
+├─────────────────────────────────────────┤
+│ - customerId: String                    │
+│ - productId: String                     │
+│ - tier: SubscriptionTier                │
+│ - startDate: LocalDate                  │
+│ - billingCycle: BillingCycle            │
+│ - userCount: Int                        │
+└─────────────────────────────────────────┘
+
+┌─────────────────────────────────────────┐
+│          PricingPlan                     │
+├─────────────────────────────────────────┤
+│ - productId: String                     │
+│ - tier: SubscriptionTier                │
+│ - pricePerUser: Double                  │
+│ - flatFee: Double                       │
+└─────────────────────────────────────────┘
+
+┌─────────────────────────────────────────┐
+│          CostExplorer                    │
+├─────────────────────────────────────────┤
+│ - subscriptions: List<Subscription>     │
+│ - pricingPlans: Map                     │
+│ - discounts: List<Discount>             │
+├─────────────────────────────────────────┤
+│ + getMonthlyReport(year): List<Bill>    │
+│ + getYearlyCost(year): Double           │
+│ + getProjectedCost(date): Double        │
+│ + getBillForMonth(year, month): Bill    │
+└─────────────────────────────────────────┘
+
+┌─────────────────────────────────────────┐
+│              Bill                        │
+├─────────────────────────────────────────┤
+│ - month: YearMonth                      │
+│ - lineItems: List<LineItem>             │
+│ - subtotal: Double                      │
+│ - discounts: Double                     │
+│ - total: Double                         │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## Kotlin Implementation
+
+### Core Data Classes
+
+```kotlin
+import java.time.*
+import java.time.temporal.ChronoUnit
+
+// ==================== Enums ====================
+
+enum class SubscriptionTier(val displayName: String) {
+    FREE("Free"),
+    STANDARD("Standard"),
+    PREMIUM("Premium"),
+    ENTERPRISE("Enterprise")
+}
+
+enum class BillingCycle(val months: Int) {
+    MONTHLY(1),
+    QUARTERLY(3),
+    ANNUAL(12)
+}
+
+enum class Product(val displayName: String) {
+    JIRA("Jira Software"),
+    CONFLUENCE("Confluence"),
+    BITBUCKET("Bitbucket"),
+    TRELLO("Trello")
+}
+
+// ==================== Subscription ====================
+
+data class Subscription(
+    val id: String,
+    val customerId: String,
+    val product: Product,
+    val tier: SubscriptionTier,
+    val startDate: LocalDate,
+    val endDate: LocalDate? = null, // null = ongoing
+    val billingCycle: BillingCycle = BillingCycle.MONTHLY,
+    val userCount: Int = 1,
+    val additionalStorage: Int = 0 // in GB
+)
+
+// ==================== Pricing Plan ====================
+
+data class PricingPlan(
+    val product: Product,
+    val tier: SubscriptionTier,
+    val pricePerUserPerMonth: Double,
+    val flatFeePerMonth: Double = 0.0,
+    val storageIncludedGB: Int = 0,
+    val additionalStoragePricePerGB: Double = 0.0
+) {
+    fun getMonthlyPrice(userCount: Int, additionalStorageGB: Int = 0): Double {
+        val userCost = pricePerUserPerMonth * userCount
+        val storageCost = if (additionalStorageGB > 0) {
+            additionalStorageGB * additionalStoragePricePerGB
+        } else 0.0
+        return userCost + flatFeePerMonth + storageCost
+    }
+}
+
+// ==================== Line Item ====================
+
+data class LineItem(
+    val description: String,
+    val quantity: Int,
+    val unitPrice: Double,
+    val amount: Double,
+    val product: Product? = null,
+    val isProrated: Boolean = false
+)
+
+// ==================== Discount ====================
+
+data class Discount(
+    val code: String,
+    val description: String,
+    val percentOff: Double = 0.0,
+    val amountOff: Double = 0.0,
+    val validFrom: LocalDate,
+    val validUntil: LocalDate,
+    val applicableProducts: Set<Product> = emptySet() // empty = all products
+) {
+    fun isValidFor(date: LocalDate, product: Product): Boolean {
+        val dateValid = !date.isBefore(validFrom) && !date.isAfter(validUntil)
+        val productValid = applicableProducts.isEmpty() || product in applicableProducts
+        return dateValid && productValid
+    }
+    
+    fun calculateDiscount(amount: Double): Double {
+        return if (percentOff > 0) {
+            amount * (percentOff / 100)
+        } else {
+            minOf(amountOff, amount)
+        }
+    }
+}
+
+// ==================== Bill ====================
+
+data class Bill(
+    val month: YearMonth,
+    val customerId: String,
+    val lineItems: List<LineItem>,
+    val subtotal: Double,
+    val discounts: List<Pair<Discount, Double>>,
+    val totalDiscount: Double,
+    val total: Double,
+    val isPaid: Boolean = false,
+    val isProjected: Boolean = true // future months are projected
+)
+```
+
+### Cost Explorer Implementation
+
+```kotlin
+// ==================== Cost Explorer ====================
+
+class CostExplorer(
+    private val customerId: String
+) {
+    private val subscriptions = mutableListOf<Subscription>()
+    private val pricingPlans = mutableMapOf<Pair<Product, SubscriptionTier>, PricingPlan>()
+    private val discounts = mutableListOf<Discount>()
+    
+    init {
+        // Initialize default pricing plans
+        initializeDefaultPricingPlans()
+    }
+    
+    private fun initializeDefaultPricingPlans() {
+        // Jira pricing
+        addPricingPlan(PricingPlan(Product.JIRA, SubscriptionTier.FREE, 0.0))
+        addPricingPlan(PricingPlan(Product.JIRA, SubscriptionTier.STANDARD, 7.75, storageIncludedGB = 250))
+        addPricingPlan(PricingPlan(Product.JIRA, SubscriptionTier.PREMIUM, 15.25, storageIncludedGB = 500))
+        addPricingPlan(PricingPlan(Product.JIRA, SubscriptionTier.ENTERPRISE, 21.0, flatFeePerMonth = 100.0, storageIncludedGB = 1000))
+        
+        // Confluence pricing
+        addPricingPlan(PricingPlan(Product.CONFLUENCE, SubscriptionTier.FREE, 0.0))
+        addPricingPlan(PricingPlan(Product.CONFLUENCE, SubscriptionTier.STANDARD, 5.75, storageIncludedGB = 250))
+        addPricingPlan(PricingPlan(Product.CONFLUENCE, SubscriptionTier.PREMIUM, 11.0, storageIncludedGB = 500))
+    }
+    
+    fun addPricingPlan(plan: PricingPlan) {
+        pricingPlans[Pair(plan.product, plan.tier)] = plan
+    }
+    
+    fun addSubscription(subscription: Subscription) {
+        subscriptions.add(subscription)
+    }
+    
+    fun addDiscount(discount: Discount) {
+        discounts.add(discount)
+    }
+    
+    // ==================== Monthly Report ====================
+    
+    /**
+     * Generate monthly bills for each month of the year.
+     */
+    fun getMonthlyReport(year: Int): List<Bill> {
+        val today = LocalDate.now()
+        val bills = mutableListOf<Bill>()
+        
+        for (month in 1..12) {
+            val yearMonth = YearMonth.of(year, month)
+            val bill = getBillForMonth(yearMonth)
+            bills.add(bill)
+        }
+        
+        return bills
+    }
+    
+    /**
+     * Get bill for a specific month.
+     */
+    fun getBillForMonth(yearMonth: YearMonth): Bill {
+        val today = LocalDate.now()
+        val isProjected = yearMonth.isAfter(YearMonth.from(today))
+        
+        val lineItems = mutableListOf<LineItem>()
+        
+        for (subscription in subscriptions) {
+            // Check if subscription is active during this month
+            if (!isSubscriptionActiveInMonth(subscription, yearMonth)) continue
+            
+            val plan = pricingPlans[Pair(subscription.product, subscription.tier)] ?: continue
+            
+            // Calculate prorated amount if subscription starts/ends mid-month
+            val (amount, isProrated) = calculateMonthlyAmount(subscription, plan, yearMonth)
+            
+            if (amount > 0) {
+                lineItems.add(LineItem(
+                    description = "${subscription.product.displayName} - ${subscription.tier.displayName}",
+                    quantity = subscription.userCount,
+                    unitPrice = plan.pricePerUserPerMonth,
+                    amount = amount,
+                    product = subscription.product,
+                    isProrated = isProrated
+                ))
+                
+                // Add storage charges if applicable
+                if (subscription.additionalStorage > 0 && plan.additionalStoragePricePerGB > 0) {
+                    lineItems.add(LineItem(
+                        description = "Additional Storage - ${subscription.additionalStorage}GB",
+                        quantity = subscription.additionalStorage,
+                        unitPrice = plan.additionalStoragePricePerGB,
+                        amount = subscription.additionalStorage * plan.additionalStoragePricePerGB,
+                        product = subscription.product
+                    ))
+                }
+            }
+        }
+        
+        val subtotal = lineItems.sumOf { it.amount }
+        
+        // Apply discounts
+        val appliedDiscounts = mutableListOf<Pair<Discount, Double>>()
+        val monthDate = yearMonth.atDay(1)
+        
+        for (discount in discounts) {
+            val applicableItems = lineItems.filter { item ->
+                item.product?.let { discount.isValidFor(monthDate, it) } ?: false
+            }
+            
+            val applicableAmount = applicableItems.sumOf { it.amount }
+            if (applicableAmount > 0) {
+                val discountAmount = discount.calculateDiscount(applicableAmount)
+                appliedDiscounts.add(Pair(discount, discountAmount))
+            }
+        }
+        
+        val totalDiscount = appliedDiscounts.sumOf { it.second }
+        val total = maxOf(0.0, subtotal - totalDiscount)
+        
+        return Bill(
+            month = yearMonth,
+            customerId = customerId,
+            lineItems = lineItems,
+            subtotal = subtotal,
+            discounts = appliedDiscounts,
+            totalDiscount = totalDiscount,
+            total = total,
+            isProjected = isProjected
+        )
+    }
+    
+    private fun isSubscriptionActiveInMonth(subscription: Subscription, yearMonth: YearMonth): Boolean {
+        val monthStart = yearMonth.atDay(1)
+        val monthEnd = yearMonth.atEndOfMonth()
+        
+        // Subscription hasn't started yet
+        if (subscription.startDate.isAfter(monthEnd)) return false
+        
+        // Subscription has ended
+        subscription.endDate?.let { endDate ->
+            if (endDate.isBefore(monthStart)) return false
+        }
+        
+        return true
+    }
+    
+    private fun calculateMonthlyAmount(
+        subscription: Subscription,
+        plan: PricingPlan,
+        yearMonth: YearMonth
+    ): Pair<Double, Boolean> {
+        val monthStart = yearMonth.atDay(1)
+        val monthEnd = yearMonth.atEndOfMonth()
+        val daysInMonth = yearMonth.lengthOfMonth()
+        
+        val effectiveStart = maxOf(subscription.startDate, monthStart)
+        val effectiveEnd = minOf(subscription.endDate ?: monthEnd, monthEnd)
+        
+        if (effectiveStart.isAfter(effectiveEnd)) {
+            return Pair(0.0, false)
+        }
+        
+        val activeDays = ChronoUnit.DAYS.between(effectiveStart, effectiveEnd) + 1
+        val fullMonthPrice = plan.getMonthlyPrice(subscription.userCount, subscription.additionalStorage)
+        
+        // Check if full month or prorated
+        return if (activeDays < daysInMonth) {
+            val proratedAmount = fullMonthPrice * (activeDays.toDouble() / daysInMonth)
+            Pair(proratedAmount, true)
+        } else {
+            Pair(fullMonthPrice, false)
+        }
+    }
+    
+    // ==================== Yearly Cost ====================
+    
+    /**
+     * Get total yearly cost estimate.
+     */
+    fun getYearlyCost(year: Int): Double {
+        return getMonthlyReport(year).sumOf { it.total }
+    }
+    
+    /**
+     * Get projected cost from a specific date until end of year.
+     */
+    fun getProjectedCostFromDate(fromDate: LocalDate): Double {
+        val year = fromDate.year
+        val fromMonth = fromDate.monthValue
+        
+        var total = 0.0
+        
+        for (month in fromMonth..12) {
+            val bill = getBillForMonth(YearMonth.of(year, month))
+            total += bill.total
+        }
+        
+        return total
+    }
+    
+    /**
+     * Get cost breakdown by product.
+     */
+    fun getCostByProduct(year: Int): Map<Product, Double> {
+        val breakdown = mutableMapOf<Product, Double>()
+        
+        for (bill in getMonthlyReport(year)) {
+            for (item in bill.lineItems) {
+                item.product?.let { product ->
+                    breakdown[product] = breakdown.getOrDefault(product, 0.0) + item.amount
+                }
+            }
+        }
+        
+        return breakdown
+    }
+    
+    // ==================== Report Generation ====================
+    
+    /**
+     * Generate a formatted cost report.
+     */
+    fun generateReport(year: Int): String {
+        val bills = getMonthlyReport(year)
+        val yearlyTotal = bills.sumOf { it.total }
+        
+        val sb = StringBuilder()
+        sb.appendLine("╔════════════════════════════════════════════════════════════╗")
+        sb.appendLine("║              COST EXPLORER REPORT - $year                   ║")
+        sb.appendLine("║              Customer: $customerId                        ║")
+        sb.appendLine("╠════════════════════════════════════════════════════════════╣")
+        sb.appendLine()
+        
+        for (bill in bills) {
+            val status = if (bill.isProjected) " (Projected)" else " (Actual)"
+            sb.appendLine("  ${bill.month.month}$status")
+            sb.appendLine("  " + "─".repeat(40))
+            
+            for (item in bill.lineItems) {
+                val prorated = if (item.isProrated) " (prorated)" else ""
+                sb.appendLine("    ${item.description}$prorated")
+                sb.appendLine("      ${item.quantity} x $${String.format("%.2f", item.unitPrice)} = $${String.format("%.2f", item.amount)}")
+            }
+            
+            if (bill.discounts.isNotEmpty()) {
+                sb.appendLine("    ───")
+                for ((discount, amount) in bill.discounts) {
+                    sb.appendLine("    Discount: ${discount.description} -$${String.format("%.2f", amount)}")
+                }
+            }
+            
+            sb.appendLine("    ───")
+            sb.appendLine("    Total: $${String.format("%.2f", bill.total)}")
+            sb.appendLine()
+        }
+        
+        sb.appendLine("╠════════════════════════════════════════════════════════════╣")
+        sb.appendLine("║  YEARLY TOTAL: $${String.format("%.2f", yearlyTotal)}".padEnd(61) + "║")
+        sb.appendLine("╚════════════════════════════════════════════════════════════╝")
+        
+        return sb.toString()
+    }
+}
+```
+
+### Usage Example
+
+```kotlin
+fun main() {
+    val costExplorer = CostExplorer("CUSTOMER-001")
+    
+    // Add subscriptions
+    costExplorer.addSubscription(Subscription(
+        id = "SUB-001",
+        customerId = "CUSTOMER-001",
+        product = Product.JIRA,
+        tier = SubscriptionTier.STANDARD,
+        startDate = LocalDate.of(2025, 1, 15), // Started mid-January
+        userCount = 25
+    ))
+    
+    costExplorer.addSubscription(Subscription(
+        id = "SUB-002",
+        customerId = "CUSTOMER-001",
+        product = Product.CONFLUENCE,
+        tier = SubscriptionTier.STANDARD,
+        startDate = LocalDate.of(2025, 1, 1),
+        userCount = 20
+    ))
+    
+    // Add a discount
+    costExplorer.addDiscount(Discount(
+        code = "ANNUAL10",
+        description = "10% Annual Discount",
+        percentOff = 10.0,
+        validFrom = LocalDate.of(2025, 1, 1),
+        validUntil = LocalDate.of(2025, 12, 31)
+    ))
+    
+    // Generate report
+    println(costExplorer.generateReport(2025))
+    
+    // Get specific month bill
+    val janBill = costExplorer.getBillForMonth(YearMonth.of(2025, 1))
+    println("\nJanuary 2025 Details:")
+    println("  Subtotal: $${String.format("%.2f", janBill.subtotal)}")
+    println("  Discounts: $${String.format("%.2f", janBill.totalDiscount)}")
+    println("  Total: $${String.format("%.2f", janBill.total)}")
+    
+    // Cost by product
+    println("\nCost by Product:")
+    costExplorer.getCostByProduct(2025).forEach { (product, cost) ->
+        println("  ${product.displayName}: $${String.format("%.2f", cost)}")
+    }
+    
+    // Yearly total
+    println("\nYearly Total: $${String.format("%.2f", costExplorer.getYearlyCost(2025))}")
+}
+```
+
+---
+
+## Design Patterns Used
+
+| Pattern | Where Used | Purpose |
+|---------|------------|---------|
+| **Strategy** | Pricing calculation | Different pricing models |
+| **Builder** | Bill construction | Complex bill generation |
+| **Factory** | Default pricing plans | Create standard plans |
+| **Composite** | Multiple subscriptions | Aggregate costs |
+
+---
+
+## Interview Discussion Points
+
+### Q: How to handle currency conversion?
+**A:** Add `CurrencyConverter` service and store prices in base currency.
+
+### Q: How to handle plan changes mid-month?
+**A:** 
+- Prorate the old plan until change date
+- Prorate the new plan from change date
+- Track plan history per subscription
+
+### Q: How to scale for millions of customers?
+**A:**
+- Cache calculated bills
+- Pre-compute monthly bills on schedule
+- Use database for storage vs in-memory
+
+---
+
+## Complexity Analysis
+
+| Operation | Time Complexity |
+|-----------|----------------|
+| Get monthly bill | O(s × d) where s = subscriptions, d = discounts |
+| Get yearly report | O(12 × s × d) |
+| Add subscription | O(1) |
+
+**Space Complexity:** O(s + p + d) where s = subscriptions, p = pricing plans, d = discounts
+

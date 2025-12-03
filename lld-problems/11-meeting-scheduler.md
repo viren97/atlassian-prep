@@ -166,18 +166,49 @@ data class MeetingRequest(
 ```kotlin
 // ==================== Calendar ====================
 
+/**
+ * User's calendar managing their meetings.
+ * 
+ * === Thread Safety ===
+ * Uses ReentrantReadWriteLock:
+ * - Read operations (getMeetings, hasConflict): concurrent
+ * - Write operations (addMeeting, removeMeeting): exclusive
+ * 
+ * === Conflict Detection ===
+ * Two time slots conflict if they overlap:
+ *   slot1.start < slot2.end AND slot1.end > slot2.start
+ * 
+ * === Available Slots Algorithm ===
+ * 1. Get all meetings for the day (sorted by start time)
+ * 2. Find gaps between meetings within working hours
+ * 3. Break gaps into slots of requested duration
+ * 
+ * Time Complexity:
+ * - addMeeting: O(n log n) due to sorting
+ * - hasConflict: O(n) linear scan
+ * - getAvailableSlots: O(n) where n = meetings that day
+ */
 class Calendar(val userId: String) {
+    // Meetings stored sorted by start time for efficient gap finding
     private val meetings = mutableListOf<Meeting>()
     private val lock = ReentrantReadWriteLock()
     
     // ==================== Meeting Management ====================
     
+    /**
+     * Add a meeting to the calendar if no conflict exists.
+     * 
+     * @param meeting The meeting to add
+     * @return true if added, false if conflicts with existing meeting
+     */
     fun addMeeting(meeting: Meeting): Boolean {
         lock.write {
+            // Check for conflicts before adding
             if (hasConflict(meeting.timeSlot)) {
                 return false
             }
             meetings.add(meeting)
+            // Keep sorted for efficient gap-finding
             meetings.sortBy { it.timeSlot.start }
             return true
         }

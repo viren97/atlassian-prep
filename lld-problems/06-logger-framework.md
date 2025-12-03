@@ -5,6 +5,188 @@ Design a logging framework that supports multiple log levels, multiple output de
 
 ---
 
+## Flow Diagrams
+
+### High-Level Logger Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    LOGGING FRAMEWORK FLOW                            │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Application Code                                                   │
+│         │                                                            │
+│         │ logger.info("User logged in", userId=123)                 │
+│         ▼                                                            │
+│   ┌─────────────┐                                                   │
+│   │   Logger    │                                                   │
+│   │  "UserSvc"  │                                                   │
+│   └─────────────┘                                                   │
+│         │                                                            │
+│         ▼                                                            │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │              Check Log Level                                 │   │
+│   │                                                             │   │
+│   │  Logger Level: INFO                                         │   │
+│   │  Message Level: INFO                                        │   │
+│   │  INFO >= INFO? → YES, proceed                               │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│         │                                                            │
+│         ▼                                                            │
+│   ┌─────────────┐                                                   │
+│   │Create       │                                                   │
+│   │LogEntry     │  { timestamp, level, logger, message, context }   │
+│   └─────────────┘                                                   │
+│         │                                                            │
+│         ▼                                                            │
+│   ┌─────────────┐                                                   │
+│   │  Formatter  │  "[2024-01-15 10:30:45] INFO UserSvc - User..."  │
+│   └─────────────┘                                                   │
+│         │                                                            │
+│         ▼                                                            │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                    Write to Sinks                            │   │
+│   │                                                             │   │
+│   │  ┌───────────┐  ┌───────────┐  ┌───────────┐               │   │
+│   │  │ Console   │  │   File    │  │  Remote   │               │   │
+│   │  │   Sink    │  │   Sink    │  │   Sink    │               │   │
+│   │  └───────────┘  └───────────┘  └───────────┘               │   │
+│   │       │              │              │                       │   │
+│   │       ▼              ▼              ▼                       │   │
+│   │   stdout         app.log      LogServer                     │   │
+│   │                                                             │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Log Level Filtering
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    LOG LEVEL HIERARCHY                               │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Level Priority (high to low):                                     │
+│                                                                      │
+│   ┌───────────────────────────────────────────────────────────────┐ │
+│   │  FATAL (5) ──▶ Critical errors, app may crash                 │ │
+│   │    │                                                          │ │
+│   │  ERROR (4) ──▶ Errors that need attention                     │ │
+│   │    │                                                          │ │
+│   │  WARN  (3) ──▶ Warning, something unexpected                  │ │
+│   │    │                                                          │ │
+│   │  INFO  (2) ──▶ General information                            │ │
+│   │    │                                                          │ │
+│   │  DEBUG (1) ──▶ Detailed debugging info                        │ │
+│   │    │                                                          │ │
+│   │  TRACE (0) ──▶ Very detailed tracing                          │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│   Filtering Rule:                                                    │
+│   ┌───────────────────────────────────────────────────────────────┐ │
+│   │  if (messageLevel.priority >= loggerLevel.priority) {         │ │
+│   │      // Log the message                                       │ │
+│   │  } else {                                                     │ │
+│   │      // Skip (message level too low)                          │ │
+│   │  }                                                            │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│   Example: Logger level = WARN                                      │
+│   ┌───────────────────────────────────────────────────────────────┐ │
+│   │  logger.debug("...")  → SKIP (DEBUG < WARN)                   │ │
+│   │  logger.info("...")   → SKIP (INFO < WARN)                    │ │
+│   │  logger.warn("...")   → LOG  (WARN >= WARN) ✓                 │ │
+│   │  logger.error("...")  → LOG  (ERROR >= WARN) ✓                │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Async Logging Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    ASYNC LOGGING                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Problem: Sync logging blocks application thread                   │
+│                                                                      │
+│   Sync (Blocking):                                                  │
+│   ┌───────────────────────────────────────────────────────────────┐ │
+│   │ App Thread:  [──work──][LOG][──────work──────][LOG][─work─]   │ │
+│   │                         │                       │              │ │
+│   │                    blocks!                 blocks!             │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│   Async (Non-Blocking):                                             │
+│   ┌───────────────────────────────────────────────────────────────┐ │
+│   │ App Thread:  [──work──][Q][──────work──────][Q][───work───]   │ │
+│   │                         │                    │                 │ │
+│   │                    enqueue              enqueue                │ │
+│   │                         │                    │                 │ │
+│   │                         ▼                    ▼                 │ │
+│   │ Log Thread:       [──LOG──]           [──LOG──]               │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│   Async Implementation:                                             │
+│   ┌───────────────────────────────────────────────────────────────┐ │
+│   │                                                               │ │
+│   │  Application    BlockingQueue       Log Worker                │ │
+│   │      │          ┌─────────┐            │                      │ │
+│   │      │──offer──▶│ Entry 1 │            │                      │ │
+│   │      │          │ Entry 2 │◀──take─────│                      │ │
+│   │      │──offer──▶│ Entry 3 │            │                      │ │
+│   │      │          └─────────┘            │                      │ │
+│   │      │                                 │                      │ │
+│   │  (non-blocking)              (writes to sinks)                │ │
+│   │                                                               │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Log Rotation Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    FILE LOG ROTATION                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Before Rotation:                                                  │
+│   ┌───────────────────────────────────────────────────────────────┐ │
+│   │  app.log (50MB) ← current, still writing                      │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│   Rotation Trigger (size > 50MB):                                   │
+│   ┌───────────────────────────────────────────────────────────────┐ │
+│   │  1. Close current file                                        │ │
+│   │  2. Rename: app.log → app.log.1                               │ │
+│   │  3. Rename: app.log.1 → app.log.2 (shift existing)            │ │
+│   │  4. Create new app.log                                        │ │
+│   │  5. Delete oldest if > maxFiles                               │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│   After Rotation (maxFiles=3):                                      │
+│   ┌───────────────────────────────────────────────────────────────┐ │
+│   │  app.log   (0KB)  ← new, current                              │ │
+│   │  app.log.1 (50MB) ← previous                                  │ │
+│   │  app.log.2 (50MB) ← older                                     │ │
+│   │  app.log.3 (deleted - exceeded maxFiles)                      │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│   Alternative: Date-based rotation                                  │
+│   ┌───────────────────────────────────────────────────────────────┐ │
+│   │  app.2024-01-15.log                                           │ │
+│   │  app.2024-01-14.log                                           │ │
+│   │  app.2024-01-13.log                                           │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements
@@ -266,19 +448,53 @@ class FileSink(
 
 // ==================== Async Sink (Decorator) ====================
 
+/**
+ * Decorator that adds asynchronous behavior to any LogSink.
+ * 
+ * === Why Async Logging? ===
+ * Synchronous logging blocks the application thread during I/O:
+ *   App Thread: [──work──][LOG][──work──][LOG][──work──]
+ *                         ↑ blocks!
+ * 
+ * Async logging queues log entries for background processing:
+ *   App Thread: [──work──][Q][────work────][Q][────work────]
+ *   Log Thread:        [LOG]           [LOG]
+ *                      ↑ non-blocking!
+ * 
+ * === Implementation ===
+ * - Uses BlockingQueue to buffer log entries
+ * - Dedicated daemon thread processes queue
+ * - Falls back to sync write if queue is full
+ * 
+ * === Thread Safety ===
+ * - LinkedBlockingQueue handles concurrent access
+ * - AtomicBoolean for safe shutdown signaling
+ * 
+ * === Decorator Pattern ===
+ * Wraps any LogSink without modifying it:
+ *   AsyncSink(FileSink("app.log"))
+ *   AsyncSink(ConsoleSink())
+ * 
+ * @param delegate The actual sink to write to
+ * @param queueSize Maximum buffered entries (default 10000)
+ */
 class AsyncSink(
     private val delegate: LogSink,
     queueSize: Int = 10000
 ) : LogSink {
     
+    // Bounded queue prevents OOM if logging faster than writing
     private val queue = LinkedBlockingQueue<LogEntry>(queueSize)
     private val running = AtomicBoolean(true)
     private val workerThread: Thread
     
     init {
+        // Start background worker thread
         workerThread = Thread {
+            // Continue until stopped AND queue is drained
             while (running.get() || queue.isNotEmpty()) {
                 try {
+                    // Poll with timeout to allow periodic shutdown check
                     val entry = queue.poll(100, TimeUnit.MILLISECONDS)
                     entry?.let { delegate.write(it) }
                 } catch (e: InterruptedException) {
@@ -288,21 +504,29 @@ class AsyncSink(
             }
         }.apply {
             name = "AsyncLogger-Worker"
-            isDaemon = true
+            isDaemon = true  // Don't prevent JVM shutdown
             start()
         }
     }
     
+    /**
+     * Queue entry for async writing.
+     * Falls back to sync write if queue is full (backpressure).
+     */
     override fun write(entry: LogEntry) {
         if (!queue.offer(entry)) {
-            // Queue full, write directly (fallback)
+            // Queue full - fall back to sync write
+            // This prevents message loss at the cost of blocking
             delegate.write(entry)
         }
     }
     
+    /**
+     * Gracefully shutdown: drain queue, then close delegate.
+     */
     override fun close() {
         running.set(false)
-        workerThread.join(5000)
+        workerThread.join(5000)  // Wait up to 5s for drain
         delegate.close()
     }
 }

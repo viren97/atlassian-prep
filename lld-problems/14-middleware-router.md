@@ -100,9 +100,50 @@ class TrieNode {
 
 // ==================== Trie Router ====================
 
+/**
+ * Trie-based URL router supporting exact, wildcard, and parameter matching.
+ * 
+ * === Route Types ===
+ * 1. Exact: "/foo/bar" matches only "/foo/bar"
+ * 2. Wildcard: "/foo/*/bar" matches "/foo/anything/bar"
+ * 3. Parameter: "/user/:id" matches "/user/123" and extracts id=123
+ * 
+ * === Trie Structure ===
+ * Each node represents a path segment:
+ * 
+ *        root
+ *       /    \
+ *     foo    user
+ *    /   \      \
+ *  bar    *     :id
+ *         |       |
+ *        baz   profile
+ * 
+ * Routes: /foo/bar, /foo/*/baz, /user/:id, /user/:id/profile
+ * 
+ * === Matching Priority ===
+ * 1. Exact match (highest priority)
+ * 2. Parameter match (:id)
+ * 3. Wildcard match (*) (lowest priority)
+ * 
+ * This prevents wildcards from "stealing" more specific matches.
+ * 
+ * === Time Complexity ===
+ * - addRoute: O(k) where k = path segments
+ * - callRoute: O(k × m) where m = potential matches at each level
+ * 
+ * === Space Complexity ===
+ * - O(n × k) where n = routes, k = avg segments per route
+ */
 class TrieRouter : Router {
     private val root = TrieNode()
     
+    /**
+     * Register a route pattern with a result string.
+     * 
+     * @param path URL pattern (e.g., "/user/:id/profile")
+     * @param result Handler identifier to return on match
+     */
     override fun addRoute(path: String, result: String) {
         val segments = getSegments(path)
         var current = root
@@ -110,27 +151,28 @@ class TrieRouter : Router {
         for (segment in segments) {
             current = when {
                 segment == "*" -> {
-                    // Wildcard segment
+                    // Wildcard: matches any single segment
                     if (current.wildcardChild == null) {
                         current.wildcardChild = TrieNode()
                     }
                     current.wildcardChild!!
                 }
                 segment.startsWith(":") -> {
-                    // Path parameter segment
+                    // Parameter: matches any segment and extracts value
                     if (current.paramChild == null) {
                         current.paramChild = TrieNode()
-                        current.paramChild!!.paramName = segment.substring(1)
+                        current.paramChild!!.paramName = segment.substring(1) // Remove ':'
                     }
                     current.paramChild!!
                 }
                 else -> {
-                    // Exact segment
+                    // Exact: matches this specific segment only
                     current.children.getOrPut(segment) { TrieNode() }
                 }
             }
         }
         
+        // Mark end of route
         current.result = result
         current.isEndOfRoute = true
     }

@@ -191,6 +191,37 @@ data class Bill(
 ```kotlin
 // ==================== Cost Explorer ====================
 
+/**
+ * Calculates and projects costs for a customer's subscriptions.
+ * 
+ * === Features ===
+ * - Monthly bill generation (actual and projected)
+ * - Yearly cost estimates
+ * - Proration for mid-month subscription changes
+ * - Discount application
+ * - Multi-product support (Jira, Confluence, etc.)
+ * 
+ * === Billing Flow ===
+ * For each month:
+ * 1. Find active subscriptions
+ * 2. Calculate base cost (users × price)
+ * 3. Apply prorating if subscription started/ended mid-month
+ * 4. Add additional charges (storage, etc.)
+ * 5. Apply applicable discounts
+ * 6. Generate bill with line items
+ * 
+ * === Proration Formula ===
+ * proratedAmount = fullMonthPrice × (activeDays / daysInMonth)
+ * 
+ * Example: $100/month subscription starting Jan 15:
+ * activeDays = 17 (Jan 15-31)
+ * proratedAmount = $100 × (17/31) = $54.84
+ * 
+ * === Time Complexity ===
+ * - getMonthlyReport: O(12 × s × d) for full year
+ *   where s = subscriptions, d = discounts
+ * - getBillForMonth: O(s × d)
+ */
 class CostExplorer(
     private val customerId: String
 ) {
@@ -199,7 +230,7 @@ class CostExplorer(
     private val discounts = mutableListOf<Discount>()
     
     init {
-        // Initialize default pricing plans
+        // Load default Atlassian-like pricing
         initializeDefaultPricingPlans()
     }
     

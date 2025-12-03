@@ -149,9 +149,36 @@ sealed class BoardCell {
 
 // ==================== Board ====================
 
+/**
+ * Game board with snakes and ladders.
+ * 
+ * === Board Layout ===
+ * - Positions 1 to size (default 100)
+ * - Position 0 = start (off board)
+ * - Position 100 = win
+ * - Snakes: head → tail (go down)
+ * - Ladders: bottom → top (go up)
+ * 
+ * === Visual Example (10x10 board) ===
+ * 
+ *   100 99 98 97 96 95 94 93 92 91
+ *    81 82 83 84 85 86 87 88 89 90
+ *    80 79 78 77 76 75 74 73 72 71
+ *    ...
+ *     1  2  3  4  5  6  7  8  9 10
+ * 
+ * === Time Complexity ===
+ * - addSnake/addLadder: O(1)
+ * - getNextPosition: O(1) - HashMap lookup
+ * 
+ * === Space Complexity ===
+ * - O(s + l) where s = snakes, l = ladders
+ * - Only special cells are stored (not all 100 cells)
+ */
 class Board(
     val size: Int = 100
 ) {
+    // Map position → cell type (Normal, Snake, or Ladder)
     private val cells = mutableMapOf<Int, BoardCell>()
     
     init {
@@ -159,6 +186,14 @@ class Board(
         (1..size).forEach { cells[it] = BoardCell.Normal }
     }
     
+    /**
+     * Add a snake to the board.
+     * Snake sends player from head to tail (going down).
+     * 
+     * @param head Position where snake head is (player lands here)
+     * @param tail Position where snake tail is (player ends up here)
+     * @throws IllegalArgumentException if positions invalid or occupied
+     */
     fun addSnake(head: Int, tail: Int) {
         require(head in 2..size) { "Snake head must be on board" }
         require(tail in 1 until head) { "Snake tail must be below head" }
@@ -166,6 +201,13 @@ class Board(
         cells[head] = BoardCell.Snake(tail)
     }
     
+    /**
+     * Add a ladder to the board.
+     * Ladder sends player from start to end (going up).
+     * 
+     * @param start Position where ladder starts (player lands here)
+     * @param end Position where ladder ends (player ends up here)
+     */
     fun addLadder(start: Int, end: Int) {
         require(start in 1 until size) { "Ladder start must be on board" }
         require(end in (start + 1)..size) { "Ladder end must be above start" }
@@ -173,20 +215,33 @@ class Board(
         cells[start] = BoardCell.Ladder(end)
     }
     
+    /**
+     * Calculate the next position after a dice roll.
+     * 
+     * Rules:
+     * 1. If roll would exceed board size → stay in place
+     * 2. If landing on snake head → slide down to tail
+     * 3. If landing on ladder bottom → climb up to top
+     * 4. If reaching exactly size → WIN
+     * 
+     * @param currentPosition Current player position (0 to size-1)
+     * @param diceRoll Dice value (1-6 typically)
+     * @return Pair of (finalPosition, moveType)
+     */
     fun getNextPosition(currentPosition: Int, diceRoll: Int): Pair<Int, MoveType> {
         val newPosition = currentPosition + diceRoll
         
-        // Beyond board - don't move
+        // Beyond board - don't move (need exact roll to win in some variants)
         if (newPosition > size) {
             return Pair(currentPosition, MoveType.NORMAL)
         }
         
-        // Exact win
+        // Exact win - reached the final square
         if (newPosition == size) {
             return Pair(size, MoveType.WIN)
         }
         
-        // Check for snake or ladder
+        // Check for snake or ladder using sealed class pattern matching
         return when (val cell = cells[newPosition]) {
             is BoardCell.Snake -> Pair(cell.tail, MoveType.SNAKE)
             is BoardCell.Ladder -> Pair(cell.top, MoveType.LADDER)

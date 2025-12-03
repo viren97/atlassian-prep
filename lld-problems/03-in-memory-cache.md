@@ -5,6 +5,189 @@ Design an in-memory cache system with support for different eviction policies (L
 
 ---
 
+## Flow Diagrams
+
+### High-Level Cache Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        CACHE OPERATIONS                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   GET Operation:                                                     │
+│   ┌──────────┐     ┌─────────────┐     ┌─────────────────────────┐  │
+│   │  Client  │────▶│  Cache.get  │────▶│     Key exists?         │  │
+│   └──────────┘     └─────────────┘     └─────────────────────────┘  │
+│                                                │                     │
+│                                           Yes ─┼─ No                 │
+│                                                │    │                │
+│                           ┌────────────────────┘    │                │
+│                           ▼                         ▼                │
+│                    ┌─────────────┐          ┌─────────────┐         │
+│                    │ TTL valid?  │          │ Return NULL │         │
+│                    └─────────────┘          │ (Cache Miss)│         │
+│                           │                 └─────────────┘         │
+│                      Yes ─┼─ No                                      │
+│                           │    │                                     │
+│          ┌────────────────┘    └────────────┐                       │
+│          ▼                                  ▼                        │
+│   ┌─────────────┐                    ┌─────────────┐                │
+│   │ Update LRU  │                    │Remove Entry │                │
+│   │ (move front)│                    │ Return NULL │                │
+│   └─────────────┘                    └─────────────┘                │
+│          │                                                           │
+│          ▼                                                           │
+│   ┌─────────────┐                                                   │
+│   │Return Value │                                                   │
+│   │(Cache Hit)  │                                                   │
+│   └─────────────┘                                                   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### PUT Operation Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        PUT OPERATION                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   cache.put(key, value)                                             │
+│         │                                                            │
+│         ▼                                                            │
+│   ┌─────────────────┐                                               │
+│   │ Key exists?     │                                               │
+│   └─────────────────┘                                               │
+│         │                                                            │
+│    Yes ─┼─ No                                                        │
+│         │    │                                                       │
+│         │    └──────────────────────┐                               │
+│         ▼                           ▼                                │
+│   ┌───────────────┐         ┌─────────────────┐                     │
+│   │ Update value  │         │ Cache full?     │                     │
+│   │ Move to front │         └─────────────────┘                     │
+│   └───────────────┘               │                                  │
+│                              Yes ─┼─ No                              │
+│                                   │    │                             │
+│                   ┌───────────────┘    └──────────┐                 │
+│                   ▼                               ▼                  │
+│           ┌─────────────────┐            ┌─────────────┐            │
+│           │ EVICT (LRU/LFU) │            │ Add entry   │            │
+│           │ Remove tail/min │            │ to front    │            │
+│           └─────────────────┘            └─────────────┘            │
+│                   │                                                  │
+│                   ▼                                                  │
+│           ┌─────────────┐                                           │
+│           │ Add new     │                                           │
+│           │ entry       │                                           │
+│           └─────────────┘                                           │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### LRU Cache Internal Structure
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     LRU CACHE STRUCTURE                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   HashMap (O(1) lookup)        Doubly Linked List (O(1) eviction)   │
+│   ┌─────────────────┐          ┌─────────────────────────────────┐  │
+│   │ Key │ Node Ref  │          │                                 │  │
+│   ├─────┼───────────┤          │  HEAD                    TAIL   │  │
+│   │ "A" │  ──────────┼────────▶│   │                       │     │  │
+│   │ "B" │  ──────────┼───────┐ │   ▼                       ▼     │  │
+│   │ "C" │  ──────────┼────┐  │ │ ┌───┐    ┌───┐    ┌───┐    ┌───┐│  │
+│   └─────┴───────────┘    │  └─┼▶│ A │◀──▶│ B │◀──▶│ C │◀──▶│ D ││  │
+│                          │    │ └───┘    └───┘    └───┘    └───┘│  │
+│                          └────┼───────────────────────┘         │  │
+│                               │  Most                   Least   │  │
+│                               │  Recent                 Recent  │  │
+│                               │  (Get/Put)              (Evict) │  │
+│                               └─────────────────────────────────┘  │
+│                                                                      │
+│   On GET "B":                                                        │
+│   1. Lookup in HashMap: O(1)                                         │
+│   2. Remove B from current position                                  │
+│   3. Add B to HEAD                                                   │
+│   Result: HEAD → B → A → C → D → TAIL                               │
+│                                                                      │
+│   On EVICT (capacity full):                                          │
+│   1. Remove node at TAIL (D)                                         │
+│   2. Remove from HashMap                                             │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### LFU Cache Internal Structure
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     LFU CACHE STRUCTURE                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Key Map              Frequency Map (LinkedHashSet per frequency)  │
+│   ┌─────────────┐      ┌─────────────────────────────────────────┐  │
+│   │ Key │ Freq  │      │ Freq │ Keys (insertion order)           │  │
+│   ├─────┼───────┤      ├──────┼──────────────────────────────────┤  │
+│   │ "A" │  3    │      │  1   │ [D] ← evict first (oldest)       │  │
+│   │ "B" │  2    │      │  2   │ [B, E] ← E is newer than B       │  │
+│   │ "C" │  3    │      │  3   │ [A, C]                           │  │
+│   │ "D" │  1    │      └──────┴──────────────────────────────────┘  │
+│   │ "E" │  2    │                                                   │
+│   └─────┴───────┘      minFrequency = 1                             │
+│                                                                      │
+│   On GET "B":                                                        │
+│   1. Lookup key: freq = 2                                           │
+│   2. Remove B from freq[2]                                          │
+│   3. Add B to freq[3]                                               │
+│   4. Update key map: B → 3                                          │
+│   5. If freq[2] empty and minFreq=2, update minFreq                 │
+│                                                                      │
+│   On EVICT:                                                          │
+│   1. Get minFrequency (1)                                           │
+│   2. Remove oldest key from freq[1] → "D"                           │
+│   3. Remove D from key map                                          │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### TTL Expiration Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      TTL EXPIRATION                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Two Strategies:                                                    │
+│                                                                      │
+│   1. LAZY EXPIRATION (on access):                                   │
+│      ┌─────────────────────────────────────────────────────────┐    │
+│      │  GET request → Check TTL → If expired → Delete → Miss   │    │
+│      │                          → If valid  → Return → Hit     │    │
+│      └─────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│   2. ACTIVE EXPIRATION (background thread):                         │
+│      ┌─────────────────────────────────────────────────────────┐    │
+│      │  Every N seconds:                                        │    │
+│      │  1. Scan entries                                         │    │
+│      │  2. Remove expired entries                               │    │
+│      │  3. Sleep N seconds                                      │    │
+│      └─────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│   Timeline Example:                                                  │
+│   ┌──────────────────────────────────────────────────────────────┐  │
+│   │ T=0    PUT(A, val, ttl=5s)   Entry created                   │  │
+│   │ T=2    GET(A) → HIT          2 < 5, valid                    │  │
+│   │ T=6    GET(A) → MISS         6 > 5, expired, deleted         │  │
+│   └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements
@@ -227,31 +410,67 @@ class DoublyLinkedList<K> {
 // ==================== LRU Cache ====================
 
 /**
- * LRU Cache Implementation
+ * LRU (Least Recently Used) Cache Implementation
  * 
- * Uses HashMap + Doubly Linked List for O(1) operations
- * - HashMap: key -> (node, entry) for O(1) lookup
+ * === Data Structure ===
+ * Uses HashMap + Doubly Linked List for O(1) all operations:
+ * - HashMap: key → (node, entry) for O(1) lookup
  * - Doubly Linked List: maintains access order
- *   - Head: Most recently used
- *   - Tail: Least recently used (evict from here)
+ *   - Head: Most Recently Used (MRU)
+ *   - Tail: Least Recently Used (LRU) - evict from here
+ * 
+ * === Visual Representation ===
+ * 
+ *   HashMap                    Doubly Linked List
+ *   ┌─────┬──────────┐        
+ *   │ "A" │ node_ref ├───────▶ HEAD ⟷ [A] ⟷ [B] ⟷ [C] ⟷ TAIL
+ *   │ "B" │ node_ref ├───────────────────┘           │
+ *   │ "C" │ node_ref ├───────────────────────────────┘
+ *   └─────┴──────────┘        MRU ◀──────────────▶ LRU
+ * 
+ * === Operations ===
+ * - GET: O(1) - HashMap lookup + move node to head
+ * - PUT: O(1) - HashMap insert + add node to head + evict if full
+ * - REMOVE: O(1) - HashMap delete + remove node from list
+ * - EVICT: O(1) - Remove tail node + delete from HashMap
+ * 
+ * === Why Doubly Linked List? ===
+ * - Need O(1) removal from middle (when accessed)
+ * - Need O(1) insertion at head (on access/insert)
+ * - Need O(1) removal from tail (eviction)
+ * - Singly linked list would require O(n) for middle removal
+ * 
+ * === Thread Safety ===
+ * Uses ReentrantReadWriteLock:
+ * - Multiple readers can access simultaneously
+ * - Writers get exclusive access
+ * - Prevents read-write conflicts
+ * 
+ * @param maxSize Maximum entries before eviction
+ * @param defaultTTL Optional time-to-live for entries
  */
 class LRUCache<K, V>(
     private val maxSize: Int,
     private val defaultTTL: Duration? = null
 ) : Cache<K, V> {
     
+    /**
+     * Combines the linked list node (for ordering) with the cache entry (for data).
+     * Allows O(1) access to both from a single HashMap lookup.
+     */
     private data class NodeEntry<K, V>(
-        val node: DoublyLinkedListNode<K>,
-        val entry: CacheEntry<V>
+        val node: DoublyLinkedListNode<K>,  // Position in access order list
+        val entry: CacheEntry<V>             // Actual cached value + metadata
     )
     
-    private val cache = HashMap<K, NodeEntry<K, V>>()
-    private val accessOrder = DoublyLinkedList<K>()
-    private val lock = ReentrantReadWriteLock()
+    private val cache = HashMap<K, NodeEntry<K, V>>()  // O(1) key lookup
+    private val accessOrder = DoublyLinkedList<K>()    // Maintains LRU ordering
+    private val lock = ReentrantReadWriteLock()        // Thread safety
     
-    private var hits = 0L
-    private var misses = 0L
-    private var evictions = 0L
+    // Statistics for monitoring cache performance
+    private var hits = 0L      // Successful gets
+    private var misses = 0L    // Failed gets (key not found or expired)
+    private var evictions = 0L // Entries removed due to capacity
     
     override fun get(key: K): V? = lock.write {
         val nodeEntry = cache[key]
@@ -358,25 +577,57 @@ class LRUCache<K, V>(
 // ==================== LFU Cache ====================
 
 /**
- * LFU Cache Implementation
+ * LFU (Least Frequently Used) Cache Implementation
  * 
- * Uses HashMap + Frequency Buckets for O(1) operations
- * - HashMap: key -> entry for O(1) lookup
- * - FrequencyMap: frequency -> Set of keys with that frequency
- * - minFrequency: tracks the minimum frequency for O(1) eviction
+ * === Data Structure ===
+ * Uses three HashMaps for O(1) operations:
+ * - cache: key → CacheEntry (actual data)
+ * - keyFrequency: key → access count
+ * - frequencyBuckets: frequency → LinkedHashSet of keys
+ * - minFrequency: tracks lowest frequency for O(1) eviction
+ * 
+ * === Visual Representation ===
+ * 
+ *   cache              keyFrequency      frequencyBuckets
+ *   ┌─────┬───────┐    ┌─────┬─────┐    ┌─────┬─────────────────┐
+ *   │ "A" │ val_A │    │ "A" │  3  │    │  1  │ {D} ← evict     │
+ *   │ "B" │ val_B │    │ "B" │  2  │    │  2  │ {B, E}          │
+ *   │ "C" │ val_C │    │ "C" │  3  │    │  3  │ {A, C}          │
+ *   │ "D" │ val_D │    │ "D" │  1  │    └─────┴─────────────────┘
+ *   │ "E" │ val_E │    │ "E" │  2  │    minFrequency = 1
+ *   └─────┴───────┘    └─────┴─────┘
+ * 
+ * === Operations ===
+ * - GET: O(1) - lookup + increment frequency + move between buckets
+ * - PUT: O(1) - add with frequency=1 + evict if needed
+ * - EVICT: O(1) - remove oldest key from minFrequency bucket
+ * 
+ * === Why LinkedHashSet for Buckets? ===
+ * - Maintains insertion order (FIFO within same frequency)
+ * - O(1) add/remove operations
+ * - When evicting from minFrequency bucket, oldest entry goes first
+ * 
+ * === LFU vs LRU ===
+ * - LFU: Evicts least frequently accessed (good for stable access patterns)
+ * - LRU: Evicts least recently accessed (good for temporal locality)
+ * - LFU better when some items are "hot" and accessed repeatedly
+ * 
+ * @param maxSize Maximum entries before eviction
+ * @param defaultTTL Optional time-to-live for entries
  */
 class LFUCache<K, V>(
     private val maxSize: Int,
     private val defaultTTL: Duration? = null
 ) : Cache<K, V> {
     
-    private val cache = HashMap<K, CacheEntry<V>>()
-    private val keyFrequency = HashMap<K, Int>()
-    private val frequencyBuckets = HashMap<Int, LinkedHashSet<K>>()
-    private var minFrequency = 0
+    private val cache = HashMap<K, CacheEntry<V>>()           // Key → Value
+    private val keyFrequency = HashMap<K, Int>()               // Key → Access count
+    private val frequencyBuckets = HashMap<Int, LinkedHashSet<K>>()  // Freq → Keys
+    private var minFrequency = 0  // Tracks minimum for O(1) eviction
     
     private val lock = ReentrantReadWriteLock()
     
+    // Statistics
     private var hits = 0L
     private var misses = 0L
     private var evictions = 0L

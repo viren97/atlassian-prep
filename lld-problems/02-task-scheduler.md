@@ -5,6 +5,271 @@ Design a Task Scheduler that can schedule and execute tasks at specified times. 
 
 ---
 
+## Flow Diagrams
+
+### High-Level Task Scheduler Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    TASK SCHEDULER OVERVIEW                           │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   ┌────────────┐     ┌─────────────────┐     ┌──────────────────┐   │
+│   │   Client   │────▶│  TaskScheduler  │────▶│  ExecutorService │   │
+│   │ schedule() │     │                 │     │   (Thread Pool)  │   │
+│   └────────────┘     │ ┌─────────────┐ │     └──────────────────┘   │
+│                      │ │  Priority   │ │             │              │
+│                      │ │   Queue     │ │             ▼              │
+│                      │ │ ┌─────────┐ │ │     ┌──────────────────┐   │
+│                      │ │ │Task 1   │ │ │     │  Worker Thread   │   │
+│                      │ │ │(HIGH)   │◀─┼──────│  executes task   │   │
+│                      │ │ ├─────────┤ │ │     └──────────────────┘   │
+│                      │ │ │Task 2   │ │ │                            │
+│                      │ │ │(MEDIUM) │ │ │                            │
+│                      │ │ ├─────────┤ │ │                            │
+│                      │ │ │Task 3   │ │ │                            │
+│                      │ │ │(LOW)    │ │ │                            │
+│                      │ │ └─────────┘ │ │                            │
+│                      │ └─────────────┘ │                            │
+│                      └─────────────────┘                            │
+│                                                                      │
+│   Scheduler Thread (runs continuously):                             │
+│   ┌──────────────────────────────────────────────────────────────┐  │
+│   │ while (running):                                             │  │
+│   │   1. Peek top of priority queue                              │  │
+│   │   2. If task.scheduledTime <= now:                           │  │
+│   │        - Remove from queue                                   │  │
+│   │        - Submit to executor                                  │  │
+│   │   3. Else: wait until next task time                         │  │
+│   └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Task Scheduling Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    SCHEDULE TASK FLOW                                │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   scheduler.schedule(task)                                          │
+│         │                                                            │
+│         ▼                                                            │
+│   ┌─────────────┐                                                   │
+│   │ Validate    │                                                   │
+│   │ Task        │                                                   │
+│   └─────────────┘                                                   │
+│         │                                                            │
+│         ▼                                                            │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                Has Dependencies?                             │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│         │                           │                                │
+│        Yes                         No                                │
+│         │                           │                                │
+│         ▼                           │                                │
+│   ┌─────────────────┐               │                                │
+│   │Check all deps   │               │                                │
+│   │completed?       │               │                                │
+│   └─────────────────┘               │                                │
+│         │                           │                                │
+│    Yes ─┼─ No                       │                                │
+│         │    │                      │                                │
+│         │    ▼                      │                                │
+│         │  ┌───────────────┐        │                                │
+│         │  │Add to pending │        │                                │
+│         │  │(wait for deps)│        │                                │
+│         │  └───────────────┘        │                                │
+│         │                           │                                │
+│         └───────────┬───────────────┘                                │
+│                     │                                                │
+│                     ▼                                                │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │           Calculate Execution Time                          │   │
+│   │                                                             │   │
+│   │  OneTime:  scheduledTime = specifiedTime                    │   │
+│   │  Daily:    scheduledTime = next occurrence of time          │   │
+│   │  Cron:     scheduledTime = parse cron expression            │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                     │                                                │
+│                     ▼                                                │
+│              ┌─────────────┐                                        │
+│              │ Add to      │                                        │
+│              │ Priority    │                                        │
+│              │ Queue       │                                        │
+│              └─────────────┘                                        │
+│                     │                                                │
+│                     ▼                                                │
+│              ┌─────────────┐                                        │
+│              │ Notify      │                                        │
+│              │ Scheduler   │                                        │
+│              │ Thread      │                                        │
+│              └─────────────┘                                        │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Task Execution Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    TASK EXECUTION FLOW                               │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Task ready for execution                                          │
+│         │                                                            │
+│         ▼                                                            │
+│   ┌─────────────┐                                                   │
+│   │Update Status│                                                   │
+│   │ → RUNNING   │                                                   │
+│   └─────────────┘                                                   │
+│         │                                                            │
+│         ▼                                                            │
+│   ┌─────────────┐                                                   │
+│   │ Notify      │                                                   │
+│   │ Listeners   │──▶ onTaskStarted(task)                           │
+│   └─────────────┘                                                   │
+│         │                                                            │
+│         ▼                                                            │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                 Execute task.command()                      │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│         │                                                            │
+│         ├─────────────────────────────┐                             │
+│         │                             │                             │
+│      Success                        Failure                         │
+│         │                             │                             │
+│         ▼                             ▼                             │
+│   ┌─────────────┐           ┌─────────────────┐                    │
+│   │Update Status│           │ Retry Count     │                    │
+│   │ → COMPLETED │           │ < MaxRetries?   │                    │
+│   └─────────────┘           └─────────────────┘                    │
+│         │                       │         │                         │
+│         │                      Yes       No                         │
+│         │                       │         │                         │
+│         │                       ▼         ▼                         │
+│         │              ┌────────────┐ ┌────────────┐               │
+│         │              │Calculate   │ │Update Status│               │
+│         │              │Backoff     │ │ → FAILED    │               │
+│         │              │Delay       │ └────────────┘               │
+│         │              └────────────┘        │                      │
+│         │                    │               │                      │
+│         │                    ▼               │                      │
+│         │              ┌────────────┐        │                      │
+│         │              │Re-schedule │        │                      │
+│         │              │with delay  │        │                      │
+│         │              └────────────┘        │                      │
+│         │                                    │                      │
+│         ▼                                    ▼                      │
+│   ┌─────────────┐                    ┌─────────────┐               │
+│   │ Notify      │                    │ Notify      │               │
+│   │ Listeners   │                    │ Listeners   │               │
+│   │onCompleted()│                    │ onFailed()  │               │
+│   └─────────────┘                    └─────────────┘               │
+│         │                                                           │
+│         ▼                                                           │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │              Is Recurring Task?                              │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│         │                           │                                │
+│        Yes                         No                                │
+│         │                           │                                │
+│         ▼                           ▼                                │
+│   ┌─────────────┐              ┌─────────────┐                      │
+│   │ Calculate   │              │    Done     │                      │
+│   │ Next Run    │              │             │                      │
+│   │ Re-schedule │              └─────────────┘                      │
+│   └─────────────┘                                                   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Retry with Backoff Strategy
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    RETRY WITH BACKOFF                                │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Exponential Backoff:                                              │
+│   ┌──────────────────────────────────────────────────────────────┐  │
+│   │                                                              │  │
+│   │  Attempt 1: Failed → Wait 1 second  → Retry                  │  │
+│   │  Attempt 2: Failed → Wait 2 seconds → Retry                  │  │
+│   │  Attempt 3: Failed → Wait 4 seconds → Retry                  │  │
+│   │  Attempt 4: Failed → Wait 8 seconds → Retry                  │  │
+│   │  Attempt 5: Failed → GIVE UP (max retries)                   │  │
+│   │                                                              │  │
+│   │  Formula: delay = baseDelay * (2 ^ attemptNumber)            │  │
+│   │           delay = min(delay, maxDelay)  // Cap at max        │  │
+│   │                                                              │  │
+│   └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│   Timeline:                                                          │
+│   ┌──────────────────────────────────────────────────────────────┐  │
+│   │ T=0    T=1    T=3    T=7     T=15                            │  │
+│   │  │      │      │      │       │                              │  │
+│   │  ▼      ▼      ▼      ▼       ▼                              │  │
+│   │ [X]    [X]    [X]    [X]     [✓]                             │  │
+│   │ Fail   Fail   Fail   Fail   Success!                         │  │
+│   │  └─1s──┘└─2s──┘└─4s──┘└─8s───┘                               │  │
+│   └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Task Dependencies Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    TASK DEPENDENCIES                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Example: Task C depends on Task A and Task B                      │
+│                                                                      │
+│   ┌─────────┐     ┌─────────┐                                       │
+│   │ Task A  │     │ Task B  │                                       │
+│   │ (ready) │     │ (ready) │                                       │
+│   └────┬────┘     └────┬────┘                                       │
+│        │               │                                             │
+│        │    depends    │                                             │
+│        └───────┬───────┘                                             │
+│                │                                                     │
+│                ▼                                                     │
+│   ┌─────────────────────┐                                           │
+│   │       Task C        │                                           │
+│   │  (waiting on A, B)  │                                           │
+│   └─────────────────────┘                                           │
+│                                                                      │
+│   Execution Timeline:                                               │
+│   ┌──────────────────────────────────────────────────────────────┐  │
+│   │                                                              │  │
+│   │  T=0          T=5          T=8          T=12                 │  │
+│   │   │            │            │            │                   │  │
+│   │   ▼            ▼            ▼            ▼                   │  │
+│   │  Task A ─────▶ ✓                                             │  │
+│   │  Task B ──────────────────▶ ✓                                │  │
+│   │  Task C (blocked)          (blocked)    Start ────▶ ✓        │  │
+│   │                                           │                   │  │
+│   │                             A & B done ───┘                   │  │
+│   │                                                              │  │
+│   └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│   Dependency Check:                                                  │
+│   ┌──────────────────────────────────────────────────────────────┐  │
+│   │  fun canExecute(task: Task): Boolean {                       │  │
+│   │      return task.dependencies.all { depId ->                 │  │
+│   │          taskRegistry[depId]?.status == COMPLETED            │  │
+│   │      }                                                       │  │
+│   │  }                                                           │  │
+│   └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements
@@ -102,50 +367,108 @@ import kotlin.math.pow
 
 // ==================== Enums ====================
 
+/**
+ * Represents the lifecycle states of a task.
+ * 
+ * State Transitions:
+ * PENDING → SCHEDULED → RUNNING → COMPLETED
+ *                    ↘         ↘ (retry)
+ *                     → CANCELLED  → FAILED
+ *                     
+ * WAITING_FOR_DEPENDENCY → SCHEDULED (when deps complete)
+ */
 enum class TaskStatus {
-    PENDING,
-    SCHEDULED,
-    RUNNING,
-    COMPLETED,
-    FAILED,
-    CANCELLED,
-    WAITING_FOR_DEPENDENCY
+    PENDING,                  // Task created but not yet in queue
+    SCHEDULED,                // Task is in the priority queue
+    RUNNING,                  // Task is currently executing
+    COMPLETED,                // Task finished successfully
+    FAILED,                   // Task failed after all retries exhausted
+    CANCELLED,                // Task was manually cancelled
+    WAITING_FOR_DEPENDENCY    // Task waiting for dependent tasks to complete
 }
 
+/**
+ * Task priority levels for scheduling order.
+ * Higher value = higher priority = executes first when times are equal.
+ * 
+ * Used in PriorityQueue comparison: tasks with same execution time
+ * are ordered by priority (CRITICAL before HIGH before MEDIUM before LOW)
+ */
 enum class Priority(val value: Int) {
-    LOW(1),
-    MEDIUM(5),
-    HIGH(10),
-    CRITICAL(100)
+    LOW(1),        // Background tasks, batch jobs
+    MEDIUM(5),     // Normal tasks (default)
+    HIGH(10),      // Important tasks
+    CRITICAL(100)  // Urgent tasks, system-critical operations
 }
 
 // ==================== Task ====================
 
+/**
+ * Represents a schedulable task with execution logic and metadata.
+ * 
+ * === Key Properties ===
+ * @property id Unique identifier (auto-generated UUID)
+ * @property name Human-readable task name for logging/monitoring
+ * @property command The actual work to execute (lambda function)
+ * @property schedule When/how often to run (OneTime, Daily, Interval, Cron)
+ * @property priority Execution priority when multiple tasks are due
+ * @property dependencies List of task IDs that must complete before this runs
+ * 
+ * === Comparable Implementation ===
+ * Tasks are compared for PriorityQueue ordering:
+ * 1. First by nextExecutionTime (earlier = higher priority)
+ * 2. Then by priority value (higher = comes first)
+ * 
+ * This ensures time-critical tasks run on schedule while allowing
+ * priority to break ties for concurrent tasks.
+ * 
+ * === Thread Safety ===
+ * Task properties (status, retryCount, etc.) are mutable and should
+ * only be modified while holding the scheduler's lock.
+ */
 data class Task(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
-    val command: () -> Unit,
-    val schedule: Schedule,
+    val command: () -> Unit,           // The work to execute
+    val schedule: Schedule,             // Scheduling strategy
     val priority: Priority = Priority.MEDIUM,
     var status: TaskStatus = TaskStatus.PENDING,
-    var retryCount: Int = 0,
-    val maxRetries: Int = 3,
-    val dependencies: List<String> = emptyList(),
+    var retryCount: Int = 0,            // Current retry attempt
+    val maxRetries: Int = 3,            // Max retries before marking FAILED
+    val dependencies: List<String> = emptyList(),  // Task IDs this depends on
     val createdAt: Instant = Instant.now(),
     var lastExecutedAt: Instant? = null,
     var nextExecutionTime: Instant? = null
 ) : Comparable<Task> {
     
     init {
+        // Calculate initial execution time based on schedule
         nextExecutionTime = schedule.getNextExecutionTime(Instant.now())
     }
     
+    /**
+     * Comparison for PriorityQueue ordering.
+     * 
+     * Returns negative if THIS task should execute BEFORE other.
+     * 
+     * Ordering logic:
+     * 1. Earlier execution time wins (time comparison)
+     * 2. If same time: higher priority.value wins
+     *    - Note: We compare other.priority to this.priority (reversed)
+     *    - This makes higher values come first
+     * 
+     * Example:
+     *   Task A: time=10:00, priority=LOW(1)
+     *   Task B: time=10:00, priority=HIGH(10)
+     *   Result: B executes first (10 > 1)
+     */
     override fun compareTo(other: Task): Int {
-        // First compare by execution time
+        // First compare by execution time (ascending - earlier first)
         val timeComparison = compareValues(nextExecutionTime, other.nextExecutionTime)
         if (timeComparison != 0) return timeComparison
         
-        // Then by priority (higher priority first)
+        // Then by priority (descending - higher value first)
+        // other.priority - this.priority gives descending order
         return other.priority.value.compareTo(priority.value)
     }
 }
@@ -332,18 +655,52 @@ open class TaskListenerAdapter : TaskListener {
 
 // ==================== Task Executor ====================
 
+/**
+ * Executes tasks and manages execution lifecycle.
+ * 
+ * === Responsibilities ===
+ * - Execute task command
+ * - Track execution time
+ * - Update task status
+ * - Notify listeners of state changes
+ * - Handle exceptions gracefully
+ * 
+ * === Execution Flow ===
+ * 1. Notify listeners: task started
+ * 2. Set status to RUNNING
+ * 3. Execute task.command()
+ * 4. On success: status = COMPLETED, notify completed
+ * 5. On failure: status = FAILED, increment retryCount, notify failed
+ * 
+ * === Thread Safety ===
+ * Each task execution runs in its own thread (from ExecutorService).
+ * Listener notifications are synchronous within the executing thread.
+ */
 class TaskExecutor(
     private val listeners: MutableList<TaskListener> = mutableListOf()
 ) {
     
+    /**
+     * Execute a task and return the result.
+     * 
+     * @param task The task to execute
+     * @return TaskResult containing success status, duration, and any error
+     * 
+     * Time Complexity: O(1) + task.command() complexity
+     */
     fun execute(task: Task): TaskResult {
         notifyStarted(task)
         
         val startTime = Instant.now()
         
         return try {
+            // Mark as running
             task.status = TaskStatus.RUNNING
+            
+            // Execute the actual work (this is where user logic runs)
             task.command()
+            
+            // Mark successful completion
             task.lastExecutedAt = Instant.now()
             task.status = TaskStatus.COMPLETED
             
@@ -356,8 +713,9 @@ class TaskExecutor(
             result
             
         } catch (e: Exception) {
+            // Handle failure - don't throw, return result with error
             task.status = TaskStatus.FAILED
-            task.retryCount++
+            task.retryCount++  // Increment for retry logic to check
             
             val result = TaskResult(
                 taskId = task.id,
@@ -383,24 +741,63 @@ class TaskExecutor(
 
 // ==================== Retry Strategy ====================
 
+/**
+ * Strategy interface for calculating retry delays.
+ * Implements Strategy Pattern - allows pluggable retry behaviors.
+ */
 interface RetryStrategy {
+    /**
+     * Calculate the delay before the next retry attempt.
+     * @param retryCount Current retry attempt (0 = first retry)
+     * @return Duration to wait, or null if no more retries
+     */
     fun getNextRetryDelay(retryCount: Int): Duration?
 }
 
+/**
+ * Exponential backoff retry strategy.
+ * 
+ * === Formula ===
+ * delay = baseDelay * (multiplier ^ retryCount)
+ * delay = min(delay, maxDelay)  // Cap at maximum
+ * 
+ * === Example (default values) ===
+ * Retry 0: 1000 * 2^0 = 1000ms (1 second)
+ * Retry 1: 1000 * 2^1 = 2000ms (2 seconds)
+ * Retry 2: 1000 * 2^2 = 4000ms (4 seconds)
+ * Retry 3: 1000 * 2^3 = 8000ms (8 seconds)
+ * ...capped at maxDelayMs (60 seconds)
+ * 
+ * === Why Exponential Backoff? ===
+ * - Prevents thundering herd problem
+ * - Gives failing systems time to recover
+ * - Reduces load during outages
+ * - Industry standard for distributed systems
+ */
 class ExponentialBackoffRetry(
-    private val baseDelayMs: Long = 1000,
-    private val maxDelayMs: Long = 60000,
-    private val multiplier: Double = 2.0
+    private val baseDelayMs: Long = 1000,    // Starting delay
+    private val maxDelayMs: Long = 60000,    // Maximum delay cap
+    private val multiplier: Double = 2.0      // Growth factor
 ) : RetryStrategy {
     
     override fun getNextRetryDelay(retryCount: Int): Duration {
+        // Calculate: base * (multiplier ^ retryCount)
         val delay = (baseDelayMs * multiplier.pow(retryCount.toDouble())).toLong()
+        // Cap at maximum to prevent extremely long waits
         return Duration.ofMillis(minOf(delay, maxDelayMs))
     }
 }
 
+/**
+ * Fixed delay retry strategy - same delay for every retry.
+ * 
+ * Use when:
+ * - System has predictable recovery time
+ * - Simple retry logic is sufficient
+ * - Don't want increasing delays
+ */
 class FixedDelayRetry(
-    private val delayMs: Long = 5000
+    private val delayMs: Long = 5000  // 5 seconds default
 ) : RetryStrategy {
     
     override fun getNextRetryDelay(retryCount: Int): Duration {

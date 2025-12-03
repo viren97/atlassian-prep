@@ -5,6 +5,172 @@ Design a Rate Limiter that can limit the number of requests a user/client can ma
 
 ---
 
+## Flow Diagrams
+
+### High-Level Request Flow
+
+```
+┌──────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐
+│  Client  │────▶│ API Gateway  │────▶│ Rate Limiter │────▶│  Server  │
+└──────────┘     └──────────────┘     └──────────────┘     └──────────┘
+                                              │
+                                              ▼
+                                      ┌──────────────┐
+                                      │   Allowed?   │
+                                      └──────────────┘
+                                         │      │
+                                    Yes ─┘      └─ No
+                                    │              │
+                                    ▼              ▼
+                              ┌──────────┐   ┌────────────┐
+                              │ Process  │   │ Return 429 │
+                              │ Request  │   │ Too Many   │
+                              └──────────┘   └────────────┘
+```
+
+### Token Bucket Algorithm Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      TOKEN BUCKET ALGORITHM                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Request Arrives                                                    │
+│         │                                                            │
+│         ▼                                                            │
+│   ┌─────────────┐                                                    │
+│   │ Check Bucket│                                                    │
+│   │   Tokens    │                                                    │
+│   └─────────────┘                                                    │
+│         │                                                            │
+│         ├── tokens > 0? ──Yes──▶ ┌─────────────┐                    │
+│         │                        │ Consume 1   │                    │
+│         │                        │   Token     │                    │
+│         │                        └─────────────┘                    │
+│         │                              │                            │
+│         │                              ▼                            │
+│         │                        ┌─────────────┐                    │
+│         │                        │  ALLOWED ✓  │                    │
+│         │                        └─────────────┘                    │
+│         │                                                            │
+│         └── tokens = 0? ──No───▶ ┌─────────────┐                    │
+│                                  │ REJECTED ✗  │                    │
+│                                  │  (429)      │                    │
+│                                  └─────────────┘                    │
+│                                                                      │
+│   Background Process (every second):                                │
+│   ┌────────────────────────────────────────┐                        │
+│   │  Add tokens at refill rate             │                        │
+│   │  tokens = min(tokens + rate, capacity) │                        │
+│   └────────────────────────────────────────┘                        │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Sliding Window Algorithm Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    SLIDING WINDOW ALGORITHM                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Timeline:  [-------- Window (60 sec) --------]                    │
+│              │                                  │                    │
+│   Requests:  ●  ●    ●  ●●●   ●    ●  ●   ●   │ ← New Request      │
+│              │                                  │                    │
+│              └─ Old requests (remove) ──────────┘                    │
+│                                                                      │
+│   Algorithm Steps:                                                   │
+│   ┌────────────────────────────────────────────────────────────┐    │
+│   │ 1. Get current timestamp                                    │    │
+│   │ 2. Remove all requests older than (now - window_size)       │    │
+│   │ 3. Count remaining requests in window                       │    │
+│   │ 4. If count < max_requests → ALLOW, add timestamp           │    │
+│   │    Else → REJECT (429)                                      │    │
+│   └────────────────────────────────────────────────────────────┘    │
+│                                                                      │
+│   Request comes at T=65s (window=60s, max=5):                       │
+│   ┌──────────────────────────────────────────────────────────────┐  │
+│   │ Timestamps: [10, 25, 40, 55, 62]                              │  │
+│   │                │   │   │   │   │                              │  │
+│   │ Remove: T < 5  ✗   ✗                                         │  │
+│   │ Keep: T >= 5           ✓   ✓   ✓                             │  │
+│   │ Count = 3, max = 5 → ALLOWED ✓                               │  │
+│   └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Fixed Window Algorithm Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     FIXED WINDOW ALGORITHM                           │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Time:    0:00    1:00    2:00    3:00                             │
+│            │       │       │       │                                 │
+│   Windows: [  W1  ][  W2  ][  W3  ][ W4 ...                         │
+│            │       │       │                                         │
+│   Limit:   5 req   5 req   5 req                                    │
+│                                                                      │
+│   Algorithm:                                                         │
+│   ┌────────────────────────────────────────────┐                    │
+│   │ 1. Calculate window = timestamp / window_size                   │
+│   │ 2. If new window → reset counter to 0      │                    │
+│   │ 3. If counter < max → ALLOW, counter++     │                    │
+│   │    Else → REJECT                           │                    │
+│   └────────────────────────────────────────────┘                    │
+│                                                                      │
+│   Edge Case (Burst at window boundary):                             │
+│   Window 1 end    Window 2 start                                    │
+│        │               │                                             │
+│   ●●●●●│               │●●●●● ← 10 requests in 2 seconds!           │
+│        └───────────────┘                                             │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Component Interaction Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                                                                      │
+│  ┌──────────┐        ┌─────────────────────┐                        │
+│  │  Client  │───────▶│  RateLimiterManager │                        │
+│  │ (API)    │        │                     │                        │
+│  └──────────┘        │  ┌───────────────┐  │                        │
+│       │              │  │ Endpoint Map  │  │                        │
+│       │              │  │ /api/users →  │──┼───┐                    │
+│       │              │  │ /api/orders → │  │   │                    │
+│       │              │  └───────────────┘  │   │                    │
+│       │              └─────────────────────┘   │                    │
+│       │                                        │                    │
+│       │              ┌─────────────────────────▼──────┐             │
+│       │              │     RateLimiterFactory         │             │
+│       │              │                                │             │
+│       │              │  ┌─────────┐ ┌─────────────┐  │             │
+│       │              │  │ Token   │ │  Sliding    │  │             │
+│       │              │  │ Bucket  │ │  Window     │  │             │
+│       │              │  └─────────┘ └─────────────┘  │             │
+│       │              │  ┌─────────┐ ┌─────────────┐  │             │
+│       │              │  │ Fixed   │ │   Leaky     │  │             │
+│       │              │  │ Window  │ │   Bucket    │  │             │
+│       │              │  └─────────┘ └─────────────┘  │             │
+│       │              └───────────────────────────────┘             │
+│       │                                                            │
+│       ▼                                                            │
+│  ┌─────────────┐                                                   │
+│  │  Response   │                                                   │
+│  │  200 OK  or │                                                   │
+│  │  429 Error  │                                                   │
+│  └─────────────┘                                                   │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements
@@ -81,6 +247,18 @@ import kotlin.concurrent.withLock
 
 // ==================== Data Classes ====================
 
+/**
+ * Configuration for rate limiters.
+ * 
+ * @property maxRequests Maximum requests allowed in the window (for sliding/fixed window)
+ * @property windowSizeMs Time window size in milliseconds (default: 1 minute)
+ * @property bucketCapacity Maximum tokens in bucket (for token/leaky bucket)
+ * @property refillRatePerSecond Tokens added per second (for token bucket) or 
+ *                               requests processed per second (for leaky bucket)
+ * 
+ * Time Complexity: O(1) for creation
+ * Space Complexity: O(1)
+ */
 data class RateLimiterConfig(
     val maxRequests: Int = 100,
     val windowSizeMs: Long = 60_000, // 1 minute
@@ -114,29 +292,81 @@ interface RateLimiter {
 
 ```kotlin
 /**
- * Token Bucket Algorithm:
- * - Bucket holds tokens up to max capacity
- * - Tokens are added at a fixed rate
- * - Each request consumes one token
- * - Request allowed only if tokens available
+ * Token Bucket Algorithm Implementation
  * 
- * Pros: Handles burst traffic well
- * Cons: Memory for storing bucket state per client
+ * === How It Works ===
+ * - Each client has a "bucket" that holds tokens (like coins in a piggy bank)
+ * - Tokens are added at a fixed rate (refillRatePerSecond)
+ * - Each request consumes one token
+ * - If no tokens available, request is rejected
+ * - Bucket has max capacity to prevent unlimited accumulation
+ * 
+ * === Visual Representation ===
+ *         ┌─────────────┐
+ *    ────▶│ ● ● ● ● ●   │ ◀── Tokens refill over time
+ *         │   BUCKET    │
+ *         │ capacity=10 │
+ *         └──────┬──────┘
+ *                │
+ *                ▼ consume 1 token per request
+ *          [Request allowed if tokens > 0]
+ * 
+ * === Time Complexity ===
+ * - isAllowed(): O(1) - constant time operations
+ * - refillTokens(): O(1) - simple arithmetic
+ * 
+ * === Space Complexity ===
+ * - O(n) where n = number of unique clients
+ * - Each client stores: tokens (Double) + timestamp (Long) = ~16 bytes
+ * 
+ * === Pros ===
+ * - Handles burst traffic well (can use saved tokens)
+ * - Smooth rate limiting over time
+ * - Memory efficient per client
+ * 
+ * === Cons ===
+ * - Requires storing state per client
+ * - Clock skew can affect accuracy in distributed systems
  */
 class TokenBucketRateLimiter(
     private val config: RateLimiterConfig
 ) : RateLimiter {
     
+    /**
+     * Represents a token bucket for a single client.
+     * Uses "lazy refill" - tokens are calculated on-demand, not via background thread.
+     */
     private data class Bucket(
-        var tokens: Double,
-        var lastRefillTimestamp: Long
+        var tokens: Double,           // Current token count (can be fractional during refill)
+        var lastRefillTimestamp: Long // Last time tokens were calculated/refilled
     )
     
+    // ConcurrentHashMap for thread-safe client bucket storage
+    // Each clientId maps to their own bucket
     private val buckets = ConcurrentHashMap<String, Bucket>()
+    
+    // ReentrantLock ensures atomic read-modify-write operations on bucket state
     private val lock = ReentrantLock()
     
+    /**
+     * Check if a request from the given client should be allowed.
+     * 
+     * Algorithm Steps:
+     * 1. Get or create bucket for client (new clients start with full bucket)
+     * 2. Refill tokens based on time elapsed since last request
+     * 3. If tokens >= 1: consume token and allow request
+     * 4. If tokens < 1: reject and calculate retry time
+     * 
+     * @param clientId Unique identifier for the client (e.g., IP, user ID, API key)
+     * @return RateLimitResult containing allowed status and retry information
+     * 
+     * Thread Safety: Uses ReentrantLock to ensure atomic operations
+     * Time Complexity: O(1)
+     */
     override fun isAllowed(clientId: String): RateLimitResult {
         lock.withLock {
+            // Get existing bucket or create new one with full capacity
+            // New clients get the benefit of full tokens initially
             val bucket = buckets.getOrPut(clientId) {
                 Bucket(
                     tokens = config.bucketCapacity.toDouble(),
@@ -144,16 +374,21 @@ class TokenBucketRateLimiter(
                 )
             }
             
-            // Refill tokens based on time elapsed
+            // Lazy refill: Calculate tokens that should have been added
+            // since the last request (instead of using a background thread)
             refillTokens(bucket)
             
             return if (bucket.tokens >= 1) {
+                // Consume one token for this request
                 bucket.tokens -= 1
                 RateLimitResult(
                     allowed = true,
                     remainingRequests = bucket.tokens.toInt()
                 )
             } else {
+                // Calculate how long client should wait before retrying
+                // Formula: (tokens_needed / refill_rate) * 1000ms
+                // tokens_needed = 1 - current_tokens (we need at least 1 token)
                 val waitTimeMs = ((1 - bucket.tokens) / config.refillRatePerSecond * 1000).toLong()
                 RateLimitResult(
                     allowed = false,
@@ -164,15 +399,38 @@ class TokenBucketRateLimiter(
         }
     }
     
+    /**
+     * Refill tokens in the bucket based on elapsed time.
+     * 
+     * This implements "lazy refill" - instead of a background thread adding
+     * tokens periodically, we calculate how many tokens should have been
+     * added since the last check.
+     * 
+     * Formula: tokensToAdd = elapsedSeconds * refillRatePerSecond
+     * 
+     * Example: If 2.5 seconds passed and refillRate is 10 tokens/sec:
+     *          tokensToAdd = 2.5 * 10 = 25 tokens
+     * 
+     * The bucket is capped at bucketCapacity to prevent unlimited accumulation.
+     * 
+     * @param bucket The bucket to refill
+     */
     private fun refillTokens(bucket: Bucket) {
         val now = System.currentTimeMillis()
+        
+        // Calculate time elapsed since last refill (in seconds)
         val elapsedSeconds = (now - bucket.lastRefillTimestamp) / 1000.0
+        
+        // Calculate tokens to add: time * rate
         val tokensToAdd = elapsedSeconds * config.refillRatePerSecond
         
+        // Add tokens but cap at bucket capacity (use minOf to enforce ceiling)
         bucket.tokens = minOf(
-            config.bucketCapacity.toDouble(),
-            bucket.tokens + tokensToAdd
+            config.bucketCapacity.toDouble(),  // Maximum allowed
+            bucket.tokens + tokensToAdd         // Current + earned
         )
+        
+        // Update timestamp for next calculation
         bucket.lastRefillTimestamp = now
     }
     

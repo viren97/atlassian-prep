@@ -94,6 +94,32 @@ import kotlin.concurrent.write
 
 // ==================== Driver Stats ====================
 
+/**
+ * Tracks lap times and performance metrics for a single driver.
+ * 
+ * === Improvement Calculation ===
+ * Delta = previousAverage - currentLapTime
+ * - Positive delta = improvement (faster than previous average)
+ * - Negative delta = slower than previous average
+ * - Zero delta = same as previous average
+ * 
+ * === Example ===
+ * Lap 1: 100s → avg=100, delta=0 (no previous)
+ * Lap 2: 95s  → avg=100, delta=100-95=+5 (improved!)
+ * Lap 3: 90s  → avg=97.5, delta=97.5-90=+7.5 (improved more!)
+ * Lap 4: 100s → avg=95, delta=95-100=-5 (got slower)
+ * 
+ * === Thread Safety ===
+ * Uses ReentrantReadWriteLock for concurrent access.
+ * Multiple threads can read stats, writes are exclusive.
+ * 
+ * Time Complexity:
+ * - addLapTime: O(n) due to average calculation
+ * - getAverageLapTime: O(n)
+ * - getBestLapTime: O(n)
+ * 
+ * Could optimize with running sum for O(1) average.
+ */
 class DriverStats(
     val driverId: String
 ) {
@@ -103,22 +129,29 @@ class DriverStats(
     
     /**
      * Add a lap time and return the improvement delta.
-     * Delta = previousAverage - currentLapTime
-     * Positive delta = improvement (faster)
-     * Negative delta = slower
+     * 
+     * Formula: delta = previousAverage - currentLapTime
+     * - Positive delta = improvement (faster)
+     * - Negative delta = slower
+     * 
+     * @param lapTime The lap time in seconds
+     * @return The improvement delta (positive = faster than average)
      */
     fun addLapTime(lapTime: Double): Double {
         lock.write {
+            // Calculate previous average before adding new lap
             val previousAverage = if (lapTimes.isEmpty()) {
-                lapTime // First lap, no improvement possible
+                lapTime // First lap: use itself as baseline
             } else {
                 lapTimes.average()
             }
             
+            // Record the lap time
             lapTimes.add(lapTime)
             
-            // Delta = previous average - current time
-            // Positive means improvement (faster than average)
+            // Calculate delta: previous average - current time
+            // If previous avg was 100 and current is 95:
+            //   delta = 100 - 95 = +5 (5 seconds faster = improvement)
             lastDelta = previousAverage - lapTime
             
             return lastDelta

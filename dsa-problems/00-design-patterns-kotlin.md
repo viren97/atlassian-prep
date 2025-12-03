@@ -1,1189 +1,1135 @@
-# Design Patterns Cheatsheet - Kotlin
+# Design Patterns Cheatsheet - With Real-World Examples
 
-## Creational Patterns
+> Design patterns are reusable solutions to common problems. This guide explains **WHEN** and **WHY** to use each pattern with real-world scenarios.
 
 ---
 
-### 1. Singleton
+## Quick Reference: When to Use What?
 
-**Intent**: Ensure a class has only one instance with global access.
+| Problem | Pattern | Real-World Example |
+|---------|---------|-------------------|
+| Need only ONE instance | Singleton | Database connection, Logger |
+| Create objects without specifying class | Factory | Payment processors, Notifications |
+| Build complex objects step-by-step | Builder | HTTP requests, SQL queries |
+| Add features without changing code | Decorator | Adding toppings to coffee |
+| Switch algorithms at runtime | Strategy | Payment methods, Sorting |
+| Notify multiple objects of changes | Observer | YouTube subscriptions, Event listeners |
+| Convert incompatible interfaces | Adapter | Power plug adapters, API wrappers |
+| Control access to an object | Proxy | Lazy loading images, Access control |
+| Execute and undo operations | Command | Undo/Redo in text editors |
+| Object behaves differently based on state | State | Order status, Traffic lights |
 
-#### Variation 1: Object Declaration (Recommended)
+---
+
+# CREATIONAL PATTERNS
+*"How do we create objects?"*
+
+---
+
+## 1. Singleton Pattern
+
+### What is it?
+Ensures a class has **only ONE instance** throughout the application.
+
+### Real-World Analogy
+Think of the **President of a country** - there's only one at a time. You don't create a new president every time you need to talk to the government.
+
+### When to Use?
+- ✅ Database connections (expensive to create)
+- ✅ Configuration/Settings manager
+- ✅ Logger (one log file for entire app)
+- ✅ Cache manager
+- ✅ Thread pools
+
+### When NOT to Use?
+- ❌ When you need multiple instances
+- ❌ When it makes testing difficult
+- ❌ When it creates tight coupling
+
+### Implementation
+
 ```kotlin
-// Thread-safe, lazy by default
+// ==========================================
+// VARIATION 1: Object Declaration (Kotlin's way)
+// Best for: Simple singletons without parameters
+// ==========================================
+
 object DatabaseConnection {
+    private var connectionCount = 0
+    
     init {
-        println("Initializing database connection")
+        println("Database connection initialized")
+        // This runs only ONCE when first accessed
     }
     
     fun query(sql: String): List<String> {
+        connectionCount++
+        println("Executing query #$connectionCount: $sql")
         return listOf("result1", "result2")
     }
 }
 
-// Usage
+// Usage - anywhere in your app:
 DatabaseConnection.query("SELECT * FROM users")
+DatabaseConnection.query("SELECT * FROM orders")
+// Both use the SAME instance!
 ```
 
-#### Variation 2: Companion Object
 ```kotlin
-class Logger private constructor() {
-    companion object {
-        val instance: Logger by lazy { Logger() }
-        
-        // Or direct initialization
-        // val instance = Logger()
-    }
-    
-    fun log(message: String) = println(message)
-}
+// ==========================================
+// VARIATION 2: Singleton with Parameters
+// Best for: When singleton needs configuration
+// ==========================================
 
-// Usage
-Logger.instance.log("Hello")
-```
-
-#### Variation 3: Lazy Initialization (Thread-safe)
-```kotlin
-class ConfigManager private constructor() {
+class AppConfig private constructor(
+    val apiUrl: String,
+    val timeout: Int
+) {
     companion object {
-        @Volatile
-        private var instance: ConfigManager? = null
+        @Volatile  // Ensures visibility across threads
+        private var instance: AppConfig? = null
         
-        fun getInstance(): ConfigManager {
+        fun initialize(apiUrl: String, timeout: Int): AppConfig {
             return instance ?: synchronized(this) {
-                instance ?: ConfigManager().also { instance = it }
+                instance ?: AppConfig(apiUrl, timeout).also { instance = it }
             }
+        }
+        
+        fun getInstance(): AppConfig {
+            return instance ?: throw IllegalStateException("AppConfig not initialized!")
         }
     }
 }
+
+// Usage:
+// At app startup:
+AppConfig.initialize("https://api.example.com", 30)
+
+// Anywhere else:
+val config = AppConfig.getInstance()
+println(config.apiUrl)
 ```
 
-#### Variation 4: Enum Singleton
 ```kotlin
-enum class AppState {
-    INSTANCE;
-    
-    var isLoggedIn: Boolean = false
-    
-    fun login() { isLoggedIn = true }
-    fun logout() { isLoggedIn = false }
-}
+// ==========================================
+// VARIATION 3: Lazy Singleton
+// Best for: Expensive initialization, delay until needed
+// ==========================================
 
-// Usage
-AppState.INSTANCE.login()
-```
-
-#### Variation 5: Singleton with Parameters
-```kotlin
-class Database private constructor(val connectionString: String) {
+class HeavyResource private constructor() {
+    init {
+        println("Loading heavy resource...")
+        Thread.sleep(2000)  // Simulating expensive operation
+    }
+    
     companion object {
-        @Volatile
-        private var instance: Database? = null
-        
-        fun getInstance(connectionString: String): Database {
-            return instance ?: synchronized(this) {
-                instance ?: Database(connectionString).also { instance = it }
-            }
+        val instance: HeavyResource by lazy {
+            // This block runs only ONCE, when first accessed
+            // Thread-safe by default
+            HeavyResource()
         }
     }
-}
-```
-
-#### Variation 6: Singleton using Dependency Injection
-```kotlin
-// Using Koin
-val appModule = module {
-    single { DatabaseConnection() }
+    
+    fun doWork() = println("Working...")
 }
 
-// Using Dagger/Hilt
-@Singleton
-class UserRepository @Inject constructor() { }
+// Usage:
+// Resource is NOT loaded yet
+println("App started")
+// Resource loads NOW (first access)
+HeavyResource.instance.doWork()
+// Uses same instance
+HeavyResource.instance.doWork()
 ```
 
 ---
 
-### 2. Factory Method
+## 2. Factory Pattern
 
-**Intent**: Define interface for creating objects, let subclasses decide which class to instantiate.
+### What is it?
+Creates objects **without exposing creation logic**. Client asks for what they need, factory decides how to create it.
 
-#### Variation 1: Simple Factory
+### Real-World Analogy
+Think of a **Pizza shop**. You say "I want a Margherita pizza" - you don't care how they make it, which oven they use, or who the chef is. The kitchen (factory) handles all that.
+
+### When to Use?
+- ✅ Creating objects based on conditions (user type, config, etc.)
+- ✅ When object creation is complex
+- ✅ When you want to decouple client from concrete classes
+- ✅ Payment processors (Stripe, PayPal, etc.)
+- ✅ Database drivers (MySQL, PostgreSQL, etc.)
+- ✅ UI components for different platforms
+
+### Implementation
+
 ```kotlin
-// Products
-interface Button {
-    fun render()
-    fun onClick(action: () -> Unit)
+// ==========================================
+// SCENARIO: Payment Processing System
+// User selects payment method, system creates appropriate processor
+// ==========================================
+
+// Step 1: Define what all payment processors can do
+interface PaymentProcessor {
+    fun processPayment(amount: Double): Boolean
+    fun refund(transactionId: String): Boolean
 }
 
-class WindowsButton : Button {
-    override fun render() = println("Windows Button")
-    override fun onClick(action: () -> Unit) { action() }
+// Step 2: Implement different payment processors
+class CreditCardProcessor : PaymentProcessor {
+    override fun processPayment(amount: Double): Boolean {
+        println("Processing $$amount via Credit Card...")
+        println("Connecting to bank... Validating card... Done!")
+        return true
+    }
+    
+    override fun refund(transactionId: String): Boolean {
+        println("Refunding transaction $transactionId to card")
+        return true
+    }
 }
 
-class MacButton : Button {
-    override fun render() = println("Mac Button")
-    override fun onClick(action: () -> Unit) { action() }
+class PayPalProcessor : PaymentProcessor {
+    override fun processPayment(amount: Double): Boolean {
+        println("Processing $$amount via PayPal...")
+        println("Redirecting to PayPal... Authenticating... Done!")
+        return true
+    }
+    
+    override fun refund(transactionId: String): Boolean {
+        println("Refunding via PayPal")
+        return true
+    }
 }
 
-// Simple Factory
-object ButtonFactory {
-    fun createButton(os: String): Button {
-        return when (os.lowercase()) {
-            "windows" -> WindowsButton()
-            "mac" -> MacButton()
-            else -> throw IllegalArgumentException("Unknown OS: $os")
+class UPIProcessor : PaymentProcessor {
+    override fun processPayment(amount: Double): Boolean {
+        println("Processing ₹$amount via UPI...")
+        println("Generating QR code... Waiting for payment... Done!")
+        return true
+    }
+    
+    override fun refund(transactionId: String): Boolean {
+        println("Refunding to UPI ID")
+        return true
+    }
+}
+
+// Step 3: Factory that creates the right processor
+object PaymentProcessorFactory {
+    
+    fun createProcessor(method: String): PaymentProcessor {
+        return when (method.lowercase()) {
+            "credit_card", "card" -> CreditCardProcessor()
+            "paypal" -> PayPalProcessor()
+            "upi" -> UPIProcessor()
+            else -> throw IllegalArgumentException("Unknown payment method: $method")
         }
     }
 }
 
-// Usage
-val button = ButtonFactory.createButton("windows")
-```
-
-#### Variation 2: Factory Method Pattern
-```kotlin
-// Abstract Creator
-abstract class Dialog {
-    abstract fun createButton(): Button
+// Step 4: Usage - Client code doesn't know about specific classes
+fun checkout(amount: Double, paymentMethod: String) {
+    // Factory creates the right processor
+    val processor = PaymentProcessorFactory.createProcessor(paymentMethod)
     
-    fun render() {
-        val button = createButton()
-        button.render()
+    // Use it - same interface regardless of which processor
+    if (processor.processPayment(amount)) {
+        println("Payment successful!")
     }
 }
 
-// Concrete Creators
-class WindowsDialog : Dialog() {
-    override fun createButton(): Button = WindowsButton()
-}
-
-class MacDialog : Dialog() {
-    override fun createButton(): Button = MacButton()
-}
-
-// Usage
-val dialog: Dialog = WindowsDialog()
-dialog.render()
+// Usage:
+checkout(99.99, "credit_card")  // Uses CreditCardProcessor
+checkout(49.99, "paypal")        // Uses PayPalProcessor
+checkout(199.0, "upi")           // Uses UPIProcessor
 ```
 
-#### Variation 3: Companion Object Factory
 ```kotlin
-interface Vehicle {
-    fun drive()
-    
-    companion object Factory {
-        fun create(type: String): Vehicle = when (type) {
-            "car" -> Car()
-            "bike" -> Bike()
-            else -> throw IllegalArgumentException()
-        }
-    }
-}
+// ==========================================
+// VARIATION: Factory with Sealed Classes
+// Best for: Type-safe, exhaustive handling
+// ==========================================
 
-class Car : Vehicle {
-    override fun drive() = println("Driving car")
-}
-
-class Bike : Vehicle {
-    override fun drive() = println("Riding bike")
-}
-
-// Usage
-val vehicle = Vehicle.create("car")
-```
-
-#### Variation 4: Sealed Class Factory
-```kotlin
 sealed class Notification {
-    abstract fun send(message: String)
+    abstract fun send(userId: String, message: String)
     
-    class Email(val address: String) : Notification() {
-        override fun send(message: String) = println("Email to $address: $message")
+    class Email(private val smtpServer: String) : Notification() {
+        override fun send(userId: String, message: String) {
+            println("📧 Sending email to $userId: $message")
+        }
     }
     
-    class SMS(val phone: String) : Notification() {
-        override fun send(message: String) = println("SMS to $phone: $message")
+    class SMS(private val twilioKey: String) : Notification() {
+        override fun send(userId: String, message: String) {
+            println("📱 Sending SMS to $userId: $message")
+        }
     }
     
-    class Push(val token: String) : Notification() {
-        override fun send(message: String) = println("Push to $token: $message")
+    class Push(private val firebaseToken: String) : Notification() {
+        override fun send(userId: String, message: String) {
+            println("🔔 Sending push notification to $userId: $message")
+        }
     }
     
     companion object {
-        fun create(type: String, target: String): Notification = when (type) {
-            "email" -> Email(target)
-            "sms" -> SMS(target)
-            "push" -> Push(target)
-            else -> throw IllegalArgumentException()
+        fun create(type: String, config: String): Notification = when (type) {
+            "email" -> Email(config)
+            "sms" -> SMS(config)
+            "push" -> Push(config)
+            else -> throw IllegalArgumentException("Unknown notification type")
         }
     }
 }
-```
 
-#### Variation 5: Generic Factory
-```kotlin
-inline fun <reified T : Any> create(): T {
-    return when (T::class) {
-        Car::class -> Car() as T
-        Bike::class -> Bike() as T
-        else -> throw IllegalArgumentException("Unknown type: ${T::class}")
-    }
-}
-
-// Usage
-val car: Car = create()
+// Usage:
+val notification = Notification.create("email", "smtp.gmail.com")
+notification.send("user123", "Your order has shipped!")
 ```
 
 ---
 
-### 3. Abstract Factory
+## 3. Builder Pattern
 
-**Intent**: Create families of related objects without specifying concrete classes.
+### What is it?
+Constructs **complex objects step-by-step**. Allows creating different representations using same building process.
+
+### Real-World Analogy
+Think of **ordering a custom burger**:
+- "I want a burger" (base)
+- "Add cheese" (optional)
+- "Add bacon" (optional)
+- "No onions" (optional)
+- "Extra sauce" (optional)
+
+You build it step by step, and at the end you get your customized burger.
+
+### When to Use?
+- ✅ Object has many optional parameters
+- ✅ Object construction is complex
+- ✅ You want readable object creation
+- ✅ HTTP requests, SQL queries, test data
+
+### When NOT to Use?
+- ❌ Simple objects with few parameters
+- ❌ All parameters are required (use constructor)
+
+### Implementation
 
 ```kotlin
-// Abstract Products
-interface Button {
-    fun paint()
-}
+// ==========================================
+// VARIATION 1: Kotlin's Built-in Way (Default Parameters)
+// Best for: Most cases in Kotlin - simple and clean
+// ==========================================
 
-interface Checkbox {
-    fun paint()
-}
-
-// Concrete Products - Windows Family
-class WindowsButton : Button {
-    override fun paint() = println("Windows Button")
-}
-
-class WindowsCheckbox : Checkbox {
-    override fun paint() = println("Windows Checkbox")
-}
-
-// Concrete Products - Mac Family
-class MacButton : Button {
-    override fun paint() = println("Mac Button")
-}
-
-class MacCheckbox : Checkbox {
-    override fun paint() = println("Mac Checkbox")
-}
-
-// Abstract Factory
-interface GUIFactory {
-    fun createButton(): Button
-    fun createCheckbox(): Checkbox
-}
-
-// Concrete Factories
-class WindowsFactory : GUIFactory {
-    override fun createButton(): Button = WindowsButton()
-    override fun createCheckbox(): Checkbox = WindowsCheckbox()
-}
-
-class MacFactory : GUIFactory {
-    override fun createButton(): Button = MacButton()
-    override fun createCheckbox(): Checkbox = MacCheckbox()
-}
-
-// Client
-class Application(private val factory: GUIFactory) {
-    private lateinit var button: Button
-    private lateinit var checkbox: Checkbox
-    
-    fun createUI() {
-        button = factory.createButton()
-        checkbox = factory.createCheckbox()
-    }
-    
-    fun paint() {
-        button.paint()
-        checkbox.paint()
-    }
-}
-
-// Usage
-val factory: GUIFactory = if (System.getProperty("os.name").contains("Windows")) {
-    WindowsFactory()
-} else {
-    MacFactory()
-}
-val app = Application(factory)
-app.createUI()
-app.paint()
-```
-
----
-
-### 4. Builder
-
-**Intent**: Construct complex objects step by step.
-
-#### Variation 1: Named/Default Parameters (Kotlin Idiomatic)
-```kotlin
-// Kotlin's built-in solution - often no Builder needed!
-data class User(
-    val id: Long,
-    val name: String,
-    val email: String,
-    val age: Int = 0,
-    val phone: String? = null,
-    val address: String? = null,
-    val isActive: Boolean = true
+data class HttpRequest(
+    val url: String,                          // Required
+    val method: String = "GET",               // Optional with default
+    val headers: Map<String, String> = emptyMap(),
+    val body: String? = null,
+    val timeout: Int = 30000,
+    val retries: Int = 3
 )
 
-// Usage - very clean!
-val user = User(
-    id = 1,
-    name = "John",
-    email = "john@example.com",
-    age = 30
-)
-```
-
-#### Variation 2: apply/also Builder Pattern
-```kotlin
-class HttpRequest {
-    var url: String = ""
-    var method: String = "GET"
-    var headers: MutableMap<String, String> = mutableMapOf()
-    var body: String? = null
-    var timeout: Int = 30000
-}
-
-// Usage with apply
-val request = HttpRequest().apply {
+// Usage - very readable!
+val request1 = HttpRequest(
     url = "https://api.example.com/users"
-    method = "POST"
-    headers["Content-Type"] = "application/json"
-    body = """{"name": "John"}"""
+)
+
+val request2 = HttpRequest(
+    url = "https://api.example.com/users",
+    method = "POST",
+    body = """{"name": "John"}""",
+    headers = mapOf("Content-Type" to "application/json"),
     timeout = 5000
-}
+)
 ```
 
-#### Variation 3: DSL Builder
 ```kotlin
-class HtmlBuilder {
+// ==========================================
+// VARIATION 2: DSL Builder (Domain Specific Language)
+// Best for: Complex nested structures, configuration
+// ==========================================
+
+// Building an HTML page using DSL
+class Html {
     private val content = StringBuilder()
     
-    fun head(block: HeadBuilder.() -> Unit) {
-        content.append("<head>")
-        content.append(HeadBuilder().apply(block).build())
-        content.append("</head>")
+    fun head(block: Head.() -> Unit) {
+        val head = Head().apply(block)
+        content.append("<head>${head.build()}</head>")
     }
     
-    fun body(block: BodyBuilder.() -> Unit) {
-        content.append("<body>")
-        content.append(BodyBuilder().apply(block).build())
-        content.append("</body>")
+    fun body(block: Body.() -> Unit) {
+        val body = Body().apply(block)
+        content.append("<body>${body.build()}</body>")
     }
     
-    fun build(): String = "<html>$content</html>"
+    fun build() = "<html>$content</html>"
 }
 
-class HeadBuilder {
+class Head {
     private var title = ""
-    
     fun title(text: String) { title = text }
     fun build() = "<title>$title</title>"
 }
 
-class BodyBuilder {
+class Body {
     private val elements = mutableListOf<String>()
-    
     fun h1(text: String) { elements.add("<h1>$text</h1>") }
     fun p(text: String) { elements.add("<p>$text</p>") }
-    fun build() = elements.joinToString("")
+    fun build() = elements.joinToString("\n")
 }
 
-fun html(block: HtmlBuilder.() -> Unit): String {
-    return HtmlBuilder().apply(block).build()
-}
+// Helper function
+fun html(block: Html.() -> Unit): String = Html().apply(block).build()
 
-// Usage
+// Usage - reads like a document!
 val page = html {
     head {
-        title("My Page")
+        title("My Website")
     }
     body {
-        h1("Welcome")
-        p("This is a paragraph")
+        h1("Welcome!")
+        p("This is my first paragraph.")
+        p("This is another paragraph.")
     }
 }
+println(page)
 ```
 
-#### Variation 4: Traditional Builder
 ```kotlin
-class Pizza private constructor(
-    val size: String,
-    val cheese: Boolean,
-    val pepperoni: Boolean,
-    val mushrooms: Boolean
-) {
-    class Builder(private val size: String) {
-        private var cheese: Boolean = false
-        private var pepperoni: Boolean = false
-        private var mushrooms: Boolean = false
-        
-        fun cheese() = apply { cheese = true }
-        fun pepperoni() = apply { pepperoni = true }
-        fun mushrooms() = apply { mushrooms = true }
-        
-        fun build() = Pizza(size, cheese, pepperoni, mushrooms)
-    }
-}
+// ==========================================
+// VARIATION 3: Traditional Builder (Java-style)
+// Best for: When you need validation during build
+// ==========================================
 
-// Usage
-val pizza = Pizza.Builder("large")
-    .cheese()
-    .pepperoni()
-    .build()
-```
-
-#### Variation 5: Builder with Required Parameters
-```kotlin
-class EmailMessage private constructor(
+class Email private constructor(
     val to: String,
     val subject: String,
     val body: String,
     val cc: List<String>,
     val bcc: List<String>,
-    val attachments: List<String>
+    val attachments: List<String>,
+    val isHtml: Boolean
 ) {
     class Builder(
-        private val to: String,      // Required
-        private val subject: String  // Required
+        private val to: String,        // Required in constructor
+        private val subject: String    // Required in constructor
     ) {
         private var body: String = ""
         private var cc: List<String> = emptyList()
         private var bcc: List<String> = emptyList()
         private var attachments: List<String> = emptyList()
+        private var isHtml: Boolean = false
         
         fun body(body: String) = apply { this.body = body }
         fun cc(vararg addresses: String) = apply { cc = addresses.toList() }
         fun bcc(vararg addresses: String) = apply { bcc = addresses.toList() }
         fun attachments(vararg files: String) = apply { attachments = files.toList() }
+        fun html() = apply { isHtml = true }
         
-        fun build() = EmailMessage(to, subject, body, cc, bcc, attachments)
+        fun build(): Email {
+            // Validation
+            require(to.contains("@")) { "Invalid email address" }
+            require(subject.isNotBlank()) { "Subject cannot be blank" }
+            
+            return Email(to, subject, body, cc, bcc, attachments, isHtml)
+        }
     }
+    
+    override fun toString() = "Email to: $to, subject: $subject"
 }
 
-// Usage
-val email = EmailMessage.Builder("john@example.com", "Hello")
-    .body("How are you?")
-    .cc("jane@example.com")
+// Usage:
+val email = Email.Builder("john@example.com", "Meeting Tomorrow")
+    .body("Hi John, let's meet at 3pm.")
+    .cc("boss@example.com", "team@example.com")
+    .attachments("agenda.pdf")
     .build()
 ```
 
 ---
 
-### 5. Prototype
-
-**Intent**: Create new objects by copying existing ones.
-
-#### Variation 1: Data Class copy()
-```kotlin
-data class Employee(
-    val id: Long,
-    val name: String,
-    val department: String,
-    val salary: Double
-)
-
-// Usage - Kotlin data classes have built-in copy!
-val original = Employee(1, "John", "Engineering", 100000.0)
-val clone = original.copy(name = "Jane", id = 2)
-```
-
-#### Variation 2: Cloneable Interface
-```kotlin
-interface Prototype<T> {
-    fun clone(): T
-}
-
-class Document(
-    var title: String,
-    var content: String,
-    var formatting: MutableMap<String, String> = mutableMapOf()
-) : Prototype<Document> {
-    
-    override fun clone(): Document {
-        return Document(
-            title = this.title,
-            content = this.content,
-            formatting = this.formatting.toMutableMap()  // Deep copy
-        )
-    }
-}
-
-// Usage
-val original = Document("Report", "Content here")
-original.formatting["font"] = "Arial"
-
-val clone = original.clone()
-clone.title = "Report Copy"
-```
-
-#### Variation 3: Prototype Registry
-```kotlin
-object ShapeRegistry {
-    private val shapes = mutableMapOf<String, Shape>()
-    
-    fun register(key: String, shape: Shape) {
-        shapes[key] = shape
-    }
-    
-    fun get(key: String): Shape? {
-        return shapes[key]?.clone()
-    }
-}
-
-interface Shape {
-    fun clone(): Shape
-    fun draw()
-}
-
-data class Circle(var radius: Double) : Shape {
-    override fun clone() = copy()
-    override fun draw() = println("Circle with radius $radius")
-}
-
-data class Rectangle(var width: Double, var height: Double) : Shape {
-    override fun clone() = copy()
-    override fun draw() = println("Rectangle $width x $height")
-}
-
-// Usage
-ShapeRegistry.register("small-circle", Circle(10.0))
-ShapeRegistry.register("big-rectangle", Rectangle(100.0, 50.0))
-
-val circle = ShapeRegistry.get("small-circle")
-```
+# STRUCTURAL PATTERNS
+*"How do we compose objects?"*
 
 ---
 
-## Structural Patterns
+## 4. Decorator Pattern
 
----
+### What is it?
+**Adds new behavior** to objects dynamically by wrapping them, without modifying original class.
 
-### 6. Adapter
+### Real-World Analogy
+Think of **coffee at Starbucks**:
+- Start with: Base coffee ($2)
+- Add milk: +$0.50
+- Add sugar: +$0.20
+- Add whipped cream: +$0.70
+- Add caramel: +$0.60
 
-**Intent**: Convert interface of a class to another interface clients expect.
+Each addition "decorates" the coffee with new features and price.
 
-#### Variation 1: Class Adapter (Inheritance)
+### When to Use?
+- ✅ Add features to objects without inheritance
+- ✅ Features can be combined in different ways
+- ✅ Java I/O streams (BufferedInputStream, etc.)
+- ✅ Adding logging, caching, validation to services
+
+### Implementation
+
 ```kotlin
-// Existing interface
-interface MediaPlayer {
-    fun play(filename: String)
-}
+// ==========================================
+// SCENARIO: Coffee Shop Ordering System
+// ==========================================
 
-// Adaptee - incompatible interface
-class AdvancedMediaPlayer {
-    fun playMp4(filename: String) = println("Playing MP4: $filename")
-    fun playVlc(filename: String) = println("Playing VLC: $filename")
-}
-
-// Adapter
-class MediaAdapter(private val advancedPlayer: AdvancedMediaPlayer) : MediaPlayer {
-    override fun play(filename: String) {
-        when {
-            filename.endsWith(".mp4") -> advancedPlayer.playMp4(filename)
-            filename.endsWith(".vlc") -> advancedPlayer.playVlc(filename)
-            else -> println("Unsupported format")
-        }
-    }
-}
-
-// Usage
-val player: MediaPlayer = MediaAdapter(AdvancedMediaPlayer())
-player.play("movie.mp4")
-```
-
-#### Variation 2: Extension Function Adapter
-```kotlin
-// Third-party class we can't modify
-class LegacyPrinter {
-    fun printText(text: String) = println("Legacy: $text")
-}
-
-// Our interface
-interface ModernPrinter {
-    fun print(document: Document)
-}
-
-// Adapter as extension function
-fun LegacyPrinter.toModernPrinter(): ModernPrinter {
-    val legacy = this
-    return object : ModernPrinter {
-        override fun print(document: Document) {
-            legacy.printText(document.content)
-        }
-    }
-}
-
-// Usage
-val modernPrinter = LegacyPrinter().toModernPrinter()
-```
-
-#### Variation 3: Lambda Adapter
-```kotlin
-// Target interface
-fun interface DataProcessor {
-    fun process(data: String): String
-}
-
-// Adaptee
-class LegacyProcessor {
-    fun legacyProcess(input: String, callback: (String) -> Unit) {
-        callback(input.uppercase())
-    }
-}
-
-// Adapter
-fun LegacyProcessor.toDataProcessor(): DataProcessor {
-    return DataProcessor { data ->
-        var result = ""
-        legacyProcess(data) { result = it }
-        result
-    }
-}
-```
-
----
-
-### 7. Decorator
-
-**Intent**: Attach additional responsibilities to an object dynamically.
-
-#### Variation 1: Interface Delegation
-```kotlin
+// Base interface - what every coffee can do
 interface Coffee {
     fun cost(): Double
     fun description(): String
 }
 
+// Basic coffee - the starting point
 class SimpleCoffee : Coffee {
-    override fun cost() = 2.0
-    override fun description() = "Simple coffee"
+    override fun cost() = 2.00
+    override fun description() = "Simple Coffee"
 }
 
-// Decorators using delegation
-class MilkDecorator(private val coffee: Coffee) : Coffee by coffee {
-    override fun cost() = coffee.cost() + 0.5
-    override fun description() = "${coffee.description()}, milk"
+class Espresso : Coffee {
+    override fun cost() = 2.50
+    override fun description() = "Espresso"
 }
 
-class SugarDecorator(private val coffee: Coffee) : Coffee by coffee {
-    override fun cost() = coffee.cost() + 0.2
-    override fun description() = "${coffee.description()}, sugar"
+// Decorator base - wraps any coffee
+abstract class CoffeeDecorator(
+    protected val coffee: Coffee
+) : Coffee {
+    override fun cost() = coffee.cost()
+    override fun description() = coffee.description()
 }
 
-class WhipDecorator(private val coffee: Coffee) : Coffee by coffee {
-    override fun cost() = coffee.cost() + 0.7
-    override fun description() = "${coffee.description()}, whip"
+// Concrete decorators - each adds something
+class MilkDecorator(coffee: Coffee) : CoffeeDecorator(coffee) {
+    override fun cost() = super.cost() + 0.50
+    override fun description() = "${super.description()} + Milk"
 }
 
-// Usage
-val coffee: Coffee = WhipDecorator(MilkDecorator(SimpleCoffee()))
-println("${coffee.description()} costs $${coffee.cost()}")
-// Output: Simple coffee, milk, whip costs $3.2
+class SugarDecorator(coffee: Coffee) : CoffeeDecorator(coffee) {
+    override fun cost() = super.cost() + 0.20
+    override fun description() = "${super.description()} + Sugar"
+}
+
+class WhipCreamDecorator(coffee: Coffee) : CoffeeDecorator(coffee) {
+    override fun cost() = super.cost() + 0.70
+    override fun description() = "${super.description()} + Whip Cream"
+}
+
+class CaramelDecorator(coffee: Coffee) : CoffeeDecorator(coffee) {
+    override fun cost() = super.cost() + 0.60
+    override fun description() = "${super.description()} + Caramel"
+}
+
+// Usage - compose decorators!
+fun main() {
+    // Simple coffee
+    val basic: Coffee = SimpleCoffee()
+    println("${basic.description()} = $${basic.cost()}")
+    // Output: Simple Coffee = $2.0
+    
+    // Coffee with milk
+    val withMilk: Coffee = MilkDecorator(SimpleCoffee())
+    println("${withMilk.description()} = $${withMilk.cost()}")
+    // Output: Simple Coffee + Milk = $2.5
+    
+    // Fancy coffee with everything!
+    val fancy: Coffee = CaramelDecorator(
+        WhipCreamDecorator(
+            MilkDecorator(
+                SugarDecorator(
+                    Espresso()
+                )
+            )
+        )
+    )
+    println("${fancy.description()} = $${fancy.cost()}")
+    // Output: Espresso + Sugar + Milk + Whip Cream + Caramel = $4.5
+}
 ```
 
-#### Variation 2: Extension Functions as Decorators
 ```kotlin
-data class Message(val content: String)
+// ==========================================
+// REAL-WORLD: Decorating Services with Logging & Caching
+// ==========================================
 
-fun Message.encrypt(): Message = Message("encrypted(${this.content})")
-fun Message.compress(): Message = Message("compressed(${this.content})")
-fun Message.addTimestamp(): Message = Message("[${System.currentTimeMillis()}] ${this.content}")
-
-// Usage - chain decorators
-val message = Message("Hello")
-    .addTimestamp()
-    .compress()
-    .encrypt()
-```
-
-#### Variation 3: Higher-Order Function Decorator
-```kotlin
-// Decorator for functions
-fun <T, R> ((T) -> R).logged(): (T) -> R = { input ->
-    println("Input: $input")
-    val result = this(input)
-    println("Output: $result")
-    result
+interface UserService {
+    fun getUser(id: String): User?
+    fun saveUser(user: User)
 }
 
-fun <T, R> ((T) -> R).timed(): (T) -> R = { input ->
-    val start = System.currentTimeMillis()
-    val result = this(input)
-    println("Execution time: ${System.currentTimeMillis() - start}ms")
-    result
+class UserServiceImpl(private val db: Database) : UserService {
+    override fun getUser(id: String): User? {
+        return db.findById(id)
+    }
+    
+    override fun saveUser(user: User) {
+        db.save(user)
+    }
 }
 
-// Usage
-val process: (Int) -> Int = { it * 2 }
-val decoratedProcess = process.logged().timed()
-decoratedProcess(5)
+// Decorator: Add logging
+class LoggingUserService(
+    private val service: UserService
+) : UserService {
+    override fun getUser(id: String): User? {
+        println("[LOG] Getting user: $id")
+        val user = service.getUser(id)
+        println("[LOG] Found: ${user != null}")
+        return user
+    }
+    
+    override fun saveUser(user: User) {
+        println("[LOG] Saving user: ${user.id}")
+        service.saveUser(user)
+        println("[LOG] Saved successfully")
+    }
+}
+
+// Decorator: Add caching
+class CachingUserService(
+    private val service: UserService
+) : UserService {
+    private val cache = mutableMapOf<String, User>()
+    
+    override fun getUser(id: String): User? {
+        // Check cache first
+        cache[id]?.let { 
+            println("[CACHE] Hit for: $id")
+            return it 
+        }
+        
+        // Miss - fetch and cache
+        println("[CACHE] Miss for: $id")
+        return service.getUser(id)?.also { cache[id] = it }
+    }
+    
+    override fun saveUser(user: User) {
+        service.saveUser(user)
+        cache[user.id] = user  // Update cache
+    }
+}
+
+// Usage - compose decorators!
+val db = Database()
+val userService: UserService = LoggingUserService(
+    CachingUserService(
+        UserServiceImpl(db)
+    )
+)
+// Now every call is: Logged → Cached → Actual service
 ```
 
 ---
 
-### 8. Facade
+## 5. Adapter Pattern
 
-**Intent**: Provide unified interface to a set of interfaces in a subsystem.
+### What is it?
+**Converts interface** of one class to another interface that client expects. Makes incompatible things work together.
+
+### Real-World Analogy
+Think of **power plug adapters** when traveling:
+- Your laptop has a US plug
+- European outlet has different shape
+- Adapter converts US plug to work with European outlet
+
+The laptop doesn't change, the outlet doesn't change, but they can now work together.
+
+### When to Use?
+- ✅ Integrating with third-party libraries
+- ✅ Legacy code integration
+- ✅ When you can't modify existing code
+- ✅ API version compatibility
+
+### Implementation
 
 ```kotlin
-// Complex subsystem classes
-class CPU {
-    fun freeze() = println("CPU freezing")
-    fun jump(position: Long) = println("CPU jumping to $position")
-    fun execute() = println("CPU executing")
+// ==========================================
+// SCENARIO: Integrating Old Payment System with New Interface
+// ==========================================
+
+// New interface our system expects
+interface ModernPaymentGateway {
+    fun pay(amount: Double, currency: String): PaymentResult
+    fun getStatus(transactionId: String): String
 }
 
-class Memory {
-    fun load(position: Long, data: ByteArray) = println("Memory loading data at $position")
-}
+data class PaymentResult(
+    val success: Boolean,
+    val transactionId: String,
+    val message: String
+)
 
-class HardDrive {
-    fun read(lba: Long, size: Int): ByteArray {
-        println("Hard drive reading $size bytes from $lba")
-        return ByteArray(size)
-    }
-}
-
-// Facade
-class ComputerFacade {
-    private val cpu = CPU()
-    private val memory = Memory()
-    private val hardDrive = HardDrive()
-    
-    companion object {
-        private const val BOOT_ADDRESS = 0L
-        private const val BOOT_SECTOR = 0L
-        private const val SECTOR_SIZE = 512
+// Old third-party library we can't modify
+// (Imagine this comes from a JAR file)
+class LegacyPaymentSystem {
+    fun makePayment(cents: Int): String {
+        println("Legacy system processing ${cents} cents...")
+        return "TXN_${System.currentTimeMillis()}"
     }
     
-    fun start() {
-        cpu.freeze()
-        memory.load(BOOT_ADDRESS, hardDrive.read(BOOT_SECTOR, SECTOR_SIZE))
-        cpu.jump(BOOT_ADDRESS)
-        cpu.execute()
+    fun checkPayment(txnId: String): Int {
+        // Returns: 0 = pending, 1 = success, -1 = failed
+        return 1
     }
 }
 
-// Usage - simple interface
-val computer = ComputerFacade()
-computer.start()
+// Adapter - makes legacy system work with our interface
+class LegacyPaymentAdapter(
+    private val legacySystem: LegacyPaymentSystem
+) : ModernPaymentGateway {
+    
+    override fun pay(amount: Double, currency: String): PaymentResult {
+        // Convert dollars to cents (legacy uses cents)
+        val cents = (amount * 100).toInt()
+        
+        // Call legacy system
+        val txnId = legacySystem.makePayment(cents)
+        
+        // Convert response to our format
+        return PaymentResult(
+            success = true,
+            transactionId = txnId,
+            message = "Payment processed via legacy system"
+        )
+    }
+    
+    override fun getStatus(transactionId: String): String {
+        // Convert legacy status codes to readable strings
+        return when (legacySystem.checkPayment(transactionId)) {
+            0 -> "PENDING"
+            1 -> "SUCCESS"
+            -1 -> "FAILED"
+            else -> "UNKNOWN"
+        }
+    }
+}
+
+// Usage - client uses modern interface, unaware of legacy system
+fun processOrder(gateway: ModernPaymentGateway, amount: Double) {
+    val result = gateway.pay(amount, "USD")
+    if (result.success) {
+        println("Order confirmed! Transaction: ${result.transactionId}")
+    }
+}
+
+// With adapter:
+val legacySystem = LegacyPaymentSystem()
+val gateway: ModernPaymentGateway = LegacyPaymentAdapter(legacySystem)
+processOrder(gateway, 99.99)
 ```
 
 ---
 
-### 9. Proxy
+## 6. Proxy Pattern
 
-**Intent**: Provide surrogate or placeholder for another object.
+### What is it?
+Provides a **surrogate or placeholder** for another object to control access to it.
 
-#### Variation 1: Virtual Proxy (Lazy Loading)
+### Real-World Analogy
+Think of a **credit card**:
+- It's a proxy for your bank account
+- You don't carry cash (real money)
+- Card controls access (PIN, limit checks)
+- Card can add features (logging purchases, fraud detection)
+
+### Types of Proxy
+1. **Virtual Proxy**: Lazy loading expensive objects
+2. **Protection Proxy**: Access control
+3. **Caching Proxy**: Cache results
+4. **Logging Proxy**: Log all operations
+
+### Implementation
+
 ```kotlin
+// ==========================================
+// SCENARIO 1: Virtual Proxy - Lazy Loading Images
+// ==========================================
+
 interface Image {
     fun display()
 }
 
-class RealImage(private val filename: String) : Image {
+// Real image - expensive to load
+class HighResolutionImage(private val filename: String) : Image {
     init {
         loadFromDisk()
     }
     
     private fun loadFromDisk() {
-        println("Loading $filename from disk...")
-        Thread.sleep(1000)  // Simulate slow loading
+        println("Loading $filename from disk... (takes 3 seconds)")
+        Thread.sleep(3000)
+        println("$filename loaded!")
     }
-    
-    override fun display() = println("Displaying $filename")
-}
-
-class ImageProxy(private val filename: String) : Image {
-    private val realImage: RealImage by lazy { RealImage(filename) }
     
     override fun display() {
-        realImage.display()  // Loads only when needed
+        println("Displaying $filename")
     }
 }
 
-// Usage
-val image: Image = ImageProxy("large_photo.jpg")
-// Image not loaded yet
-image.display()  // Now it loads
+// Proxy - delays loading until actually needed
+class ImageProxy(private val filename: String) : Image {
+    private var realImage: HighResolutionImage? = null
+    
+    override fun display() {
+        // Load only when display() is called
+        if (realImage == null) {
+            println("First access - loading image...")
+            realImage = HighResolutionImage(filename)
+        }
+        realImage!!.display()
+    }
+}
+
+// Usage:
+fun main() {
+    // Create proxy - image NOT loaded yet (instant)
+    val image: Image = ImageProxy("vacation_photo.jpg")
+    println("Proxy created")
+    
+    // ... later in the app ...
+    
+    // NOW the image loads
+    image.display()
+    
+    // Second call - already loaded, instant
+    image.display()
+}
 ```
 
-#### Variation 2: Protection Proxy
 ```kotlin
+// ==========================================
+// SCENARIO 2: Protection Proxy - Access Control
+// ==========================================
+
 interface Document {
     fun read(): String
     fun write(content: String)
+    fun delete()
 }
 
-class SecureDocument(private val content: String) : Document {
+class SecureDocument(private var content: String) : Document {
     override fun read() = content
-    override fun write(content: String) = println("Writing: $content")
+    override fun write(content: String) { this.content = content }
+    override fun delete() { content = "" }
 }
 
+// Proxy that checks permissions
 class DocumentProxy(
     private val document: Document,
-    private val userRole: String
+    private val currentUserRole: String
 ) : Document {
     
     override fun read(): String {
-        return document.read()  // Everyone can read
+        // Everyone can read
+        log("READ")
+        return document.read()
     }
     
     override fun write(content: String) {
-        if (userRole == "admin") {
-            document.write(content)
-        } else {
-            throw SecurityException("Only admins can write")
+        // Only editors and admins can write
+        if (currentUserRole !in listOf("editor", "admin")) {
+            throw SecurityException("You don't have permission to write!")
         }
+        log("WRITE")
+        document.write(content)
     }
-}
-```
-
-#### Variation 3: Caching Proxy
-```kotlin
-interface UserService {
-    fun getUser(id: Long): User
-}
-
-class UserServiceImpl : UserService {
-    override fun getUser(id: Long): User {
-        println("Fetching user $id from database...")
-        Thread.sleep(100)
-        return User(id, "User $id")
-    }
-}
-
-class CachingUserServiceProxy(private val service: UserService) : UserService {
-    private val cache = mutableMapOf<Long, User>()
     
-    override fun getUser(id: Long): User {
-        return cache.getOrPut(id) {
-            println("Cache miss for user $id")
-            service.getUser(id)
+    override fun delete() {
+        // Only admins can delete
+        if (currentUserRole != "admin") {
+            throw SecurityException("Only admins can delete!")
         }
-    }
-}
-```
-
-#### Variation 4: Kotlin Delegated Properties as Proxy
-```kotlin
-import kotlin.reflect.KProperty
-
-class LoggingDelegate<T>(private var value: T) {
-    operator fun getValue(thisRef: Any?, property: KProperty<*>): T {
-        println("Getting ${property.name}: $value")
-        return value
+        log("DELETE")
+        document.delete()
     }
     
-    operator fun setValue(thisRef: Any?, property: KProperty<*>, newValue: T) {
-        println("Setting ${property.name}: $value -> $newValue")
-        value = newValue
+    private fun log(operation: String) {
+        println("[AUDIT] User ($currentUserRole) performed: $operation")
     }
 }
 
-class User {
-    var name: String by LoggingDelegate("John")
-    var age: Int by LoggingDelegate(0)
-}
+// Usage:
+val doc = SecureDocument("Secret content")
 
-// Usage
-val user = User()
-user.name = "Jane"  // Prints: Setting name: John -> Jane
-println(user.name)  // Prints: Getting name: Jane
+val viewerDoc = DocumentProxy(doc, "viewer")
+viewerDoc.read()      // ✅ Works
+viewerDoc.write("x")  // ❌ Throws SecurityException
+
+val adminDoc = DocumentProxy(doc, "admin")
+adminDoc.delete()     // ✅ Works
 ```
 
 ---
 
-### 10. Composite
-
-**Intent**: Compose objects into tree structures.
-
-```kotlin
-interface FileSystemItem {
-    val name: String
-    fun getSize(): Long
-    fun display(indent: String = "")
-}
-
-class File(
-    override val name: String,
-    private val size: Long
-) : FileSystemItem {
-    override fun getSize() = size
-    override fun display(indent: String) {
-        println("$indent📄 $name ($size bytes)")
-    }
-}
-
-class Directory(override val name: String) : FileSystemItem {
-    private val children = mutableListOf<FileSystemItem>()
-    
-    fun add(item: FileSystemItem) = children.add(item)
-    fun remove(item: FileSystemItem) = children.remove(item)
-    
-    override fun getSize(): Long = children.sumOf { it.getSize() }
-    
-    override fun display(indent: String) {
-        println("$indent📁 $name (${getSize()} bytes)")
-        children.forEach { it.display("$indent  ") }
-    }
-}
-
-// Usage
-val root = Directory("root").apply {
-    add(File("readme.txt", 100))
-    add(Directory("src").apply {
-        add(File("main.kt", 500))
-        add(File("utils.kt", 300))
-    })
-    add(Directory("test").apply {
-        add(File("test.kt", 200))
-    })
-}
-root.display()
-```
+# BEHAVIORAL PATTERNS
+*"How do objects communicate?"*
 
 ---
 
-### 11. Bridge
+## 7. Strategy Pattern
 
-**Intent**: Decouple abstraction from implementation.
+### What is it?
+Defines a **family of algorithms**, encapsulates each one, and makes them **interchangeable** at runtime.
 
-```kotlin
-// Implementor
-interface Renderer {
-    fun renderCircle(radius: Float)
-    fun renderSquare(side: Float)
-}
+### Real-World Analogy
+Think of **getting to the airport**:
+- Strategy 1: Drive yourself (cheapest, need parking)
+- Strategy 2: Take Uber (convenient, expensive)
+- Strategy 3: Take the metro (cheapest, takes longest)
 
-class VectorRenderer : Renderer {
-    override fun renderCircle(radius: Float) = println("Drawing circle as vectors, radius: $radius")
-    override fun renderSquare(side: Float) = println("Drawing square as vectors, side: $side")
-}
+You pick the strategy based on your situation (time, money, luggage).
 
-class RasterRenderer : Renderer {
-    override fun renderCircle(radius: Float) = println("Drawing circle as pixels, radius: $radius")
-    override fun renderSquare(side: Float) = println("Drawing square as pixels, side: $side")
-}
+### When to Use?
+- ✅ Multiple ways to do the same thing
+- ✅ Algorithms need to be swapped at runtime
+- ✅ Avoid long if-else or switch statements
+- ✅ Payment methods, sorting algorithms, compression
 
-// Abstraction
-abstract class Shape(protected val renderer: Renderer) {
-    abstract fun draw()
-    abstract fun resize(factor: Float)
-}
-
-class Circle(
-    renderer: Renderer,
-    private var radius: Float
-) : Shape(renderer) {
-    override fun draw() = renderer.renderCircle(radius)
-    override fun resize(factor: Float) { radius *= factor }
-}
-
-class Square(
-    renderer: Renderer,
-    private var side: Float
-) : Shape(renderer) {
-    override fun draw() = renderer.renderSquare(side)
-    override fun resize(factor: Float) { side *= factor }
-}
-
-// Usage
-val vectorCircle = Circle(VectorRenderer(), 5f)
-val rasterCircle = Circle(RasterRenderer(), 5f)
-
-vectorCircle.draw()  // Drawing circle as vectors
-rasterCircle.draw()  // Drawing circle as pixels
-```
-
----
-
-### 12. Flyweight
-
-**Intent**: Share common state between objects to reduce memory.
+### Implementation
 
 ```kotlin
-// Flyweight - shared state
-data class TreeType(
-    val name: String,
-    val color: String,
-    val texture: String  // Heavy resource
-)
+// ==========================================
+// SCENARIO: E-commerce Pricing Strategies
+// Different discounts for different customer types
+// ==========================================
 
-// Flyweight Factory
-object TreeTypeFactory {
-    private val treeTypes = mutableMapOf<String, TreeType>()
-    
-    fun getTreeType(name: String, color: String, texture: String): TreeType {
-        val key = "$name-$color"
-        return treeTypes.getOrPut(key) {
-            println("Creating new tree type: $key")
-            TreeType(name, color, texture)
-        }
-    }
+// Strategy interface
+interface PricingStrategy {
+    fun calculatePrice(basePrice: Double): Double
+    fun description(): String
 }
 
-// Context - unique state
-class Tree(
-    private val x: Int,
-    private val y: Int,
-    private val type: TreeType  // Shared flyweight
-) {
-    fun draw() = println("Drawing ${type.name} at ($x, $y)")
+// Concrete strategies
+class RegularPricing : PricingStrategy {
+    override fun calculatePrice(basePrice: Double) = basePrice
+    override fun description() = "Regular price (no discount)"
 }
 
-// Forest using flyweights
-class Forest {
-    private val trees = mutableListOf<Tree>()
-    
-    fun plantTree(x: Int, y: Int, name: String, color: String, texture: String) {
-        val type = TreeTypeFactory.getTreeType(name, color, texture)
-        trees.add(Tree(x, y, type))
-    }
-    
-    fun draw() = trees.forEach { it.draw() }
+class MemberPricing : PricingStrategy {
+    override fun calculatePrice(basePrice: Double) = basePrice * 0.9  // 10% off
+    override fun description() = "Member discount (10% off)"
 }
 
-// Usage - 1M trees but only few TreeType objects
-val forest = Forest()
-repeat(1_000_000) { i ->
-    forest.plantTree(i % 100, i / 100, "Oak", "Green", "oak_texture.png")
-}
-```
-
----
-
-## Behavioral Patterns
-
----
-
-### 13. Strategy
-
-**Intent**: Define family of algorithms and make them interchangeable.
-
-#### Variation 1: Interface Strategy
-```kotlin
-interface PaymentStrategy {
-    fun pay(amount: Double)
+class PremiumPricing : PricingStrategy {
+    override fun calculatePrice(basePrice: Double) = basePrice * 0.8  // 20% off
+    override fun description() = "Premium member discount (20% off)"
 }
 
-class CreditCardPayment(private val cardNumber: String) : PaymentStrategy {
-    override fun pay(amount: Double) = println("Paid $$amount with credit card $cardNumber")
+class HolidaySalePricing(private val discountPercent: Int) : PricingStrategy {
+    override fun calculatePrice(basePrice: Double) = 
+        basePrice * (1 - discountPercent / 100.0)
+    override fun description() = "Holiday Sale ($discountPercent% off)"
 }
 
-class PayPalPayment(private val email: String) : PaymentStrategy {
-    override fun pay(amount: Double) = println("Paid $$amount with PayPal ($email)")
-}
-
-class CryptoPayment(private val wallet: String) : PaymentStrategy {
-    override fun pay(amount: Double) = println("Paid $$amount with crypto wallet $wallet")
-}
-
+// Context - uses the strategy
 class ShoppingCart {
-    private var paymentStrategy: PaymentStrategy? = null
+    private val items = mutableListOf<Pair<String, Double>>()
+    private var pricingStrategy: PricingStrategy = RegularPricing()
     
-    fun setPaymentStrategy(strategy: PaymentStrategy) {
-        paymentStrategy = strategy
+    fun addItem(name: String, price: Double) {
+        items.add(name to price)
     }
     
-    fun checkout(amount: Double) {
-        paymentStrategy?.pay(amount) ?: throw IllegalStateException("No payment method set")
+    // Strategy can be changed at runtime!
+    fun setPricingStrategy(strategy: PricingStrategy) {
+        pricingStrategy = strategy
+        println("Switched to: ${strategy.description()}")
+    }
+    
+    fun checkout(): Double {
+        val baseTotal = items.sumOf { it.second }
+        val finalPrice = pricingStrategy.calculatePrice(baseTotal)
+        
+        println("\n--- Checkout ---")
+        items.forEach { println("${it.first}: $${it.second}") }
+        println("Base total: $$baseTotal")
+        println("${pricingStrategy.description()}")
+        println("Final price: $${"%.2f".format(finalPrice)}")
+        
+        return finalPrice
     }
 }
 
-// Usage
-val cart = ShoppingCart()
-cart.setPaymentStrategy(CreditCardPayment("1234-5678"))
-cart.checkout(100.0)
+// Usage:
+fun main() {
+    val cart = ShoppingCart()
+    cart.addItem("Laptop", 1000.0)
+    cart.addItem("Mouse", 50.0)
+    
+    // Regular customer
+    cart.setPricingStrategy(RegularPricing())
+    cart.checkout()  // $1050.00
+    
+    // Customer logs in - they're a premium member!
+    cart.setPricingStrategy(PremiumPricing())
+    cart.checkout()  // $840.00
+    
+    // Black Friday sale activated!
+    cart.setPricingStrategy(HolidaySalePricing(30))
+    cart.checkout()  // $735.00
+}
 ```
 
-#### Variation 2: Lambda Strategy (Kotlin Idiomatic)
 ```kotlin
+// ==========================================
+// KOTLIN IDIOMATIC: Strategy with Lambda
+// Simpler when strategies are single functions
+// ==========================================
+
 class Sorter<T> {
-    fun sort(items: MutableList<T>, strategy: (T, T) -> Int) {
-        items.sortWith { a, b -> strategy(a, b) }
+    fun sort(items: MutableList<T>, strategy: (T, T) -> Int): List<T> {
+        return items.sortedWith { a, b -> strategy(a, b) }
     }
 }
 
-// Usage
+// Usage with lambdas:
 val numbers = mutableListOf(5, 2, 8, 1, 9)
-
 val sorter = Sorter<Int>()
-sorter.sort(numbers) { a, b -> a - b }  // Ascending
-sorter.sort(numbers) { a, b -> b - a }  // Descending
-```
 
-#### Variation 3: Sealed Class Strategy
-```kotlin
-sealed class CompressionStrategy {
-    abstract fun compress(data: ByteArray): ByteArray
-    
-    object Zip : CompressionStrategy() {
-        override fun compress(data: ByteArray) = data // zip implementation
-    }
-    
-    object Gzip : CompressionStrategy() {
-        override fun compress(data: ByteArray) = data // gzip implementation
-    }
-    
-    class Custom(private val algorithm: (ByteArray) -> ByteArray) : CompressionStrategy() {
-        override fun compress(data: ByteArray) = algorithm(data)
-    }
-}
+// Strategy 1: Ascending
+val ascending = sorter.sort(numbers) { a, b -> a - b }
+println(ascending)  // [1, 2, 5, 8, 9]
 
-class Compressor(private var strategy: CompressionStrategy = CompressionStrategy.Zip) {
-    fun setStrategy(strategy: CompressionStrategy) { this.strategy = strategy }
-    fun compress(data: ByteArray) = strategy.compress(data)
+// Strategy 2: Descending
+val descending = sorter.sort(numbers) { a, b -> b - a }
+println(descending)  // [9, 8, 5, 2, 1]
+
+// Strategy 3: By digit sum
+val byDigitSum = sorter.sort(numbers) { a, b -> 
+    a.toString().sumOf { it.digitToInt() } - b.toString().sumOf { it.digitToInt() }
 }
 ```
 
 ---
 
-### 14. Observer
+## 8. Observer Pattern
 
-**Intent**: Define one-to-many dependency between objects.
+### What is it?
+Defines a **one-to-many relationship** where when one object changes, all its dependents are **notified automatically**.
 
-#### Variation 1: Interface Observer
+### Real-World Analogy
+Think of **YouTube subscriptions**:
+- You subscribe to a channel (become an observer)
+- When creator uploads a video (subject changes)
+- All subscribers get notified
+- You can unsubscribe anytime
+
+### When to Use?
+- ✅ Event handling systems
+- ✅ UI updates when data changes
+- ✅ Notifications, newsletters
+- ✅ Stock price updates to multiple displays
+- ✅ MVC/MVVM architecture
+
+### Implementation
+
 ```kotlin
-interface Observer<T> {
-    fun update(value: T)
+// ==========================================
+// SCENARIO: Stock Price Monitoring System
+// Multiple displays update when stock price changes
+// ==========================================
+
+// Observer interface - what observers must implement
+interface StockObserver {
+    fun update(stockSymbol: String, price: Double)
 }
 
-class Observable<T> {
-    private val observers = mutableListOf<Observer<T>>()
+// Subject - the thing being observed
+class StockMarket {
+    private val observers = mutableListOf<StockObserver>()
+    private val stockPrices = mutableMapOf<String, Double>()
     
-    fun addObserver(observer: Observer<T>) = observers.add(observer)
-    fun removeObserver(observer: Observer<T>) = observers.remove(observer)
+    fun subscribe(observer: StockObserver) {
+        observers.add(observer)
+        println("New subscriber added. Total: ${observers.size}")
+    }
     
-    fun notifyObservers(value: T) {
-        observers.forEach { it.update(value) }
+    fun unsubscribe(observer: StockObserver) {
+        observers.remove(observer)
+        println("Subscriber removed. Total: ${observers.size}")
+    }
+    
+    // When price changes, notify all observers
+    fun updatePrice(symbol: String, price: Double) {
+        stockPrices[symbol] = price
+        notifyObservers(symbol, price)
+    }
+    
+    private fun notifyObservers(symbol: String, price: Double) {
+        observers.forEach { it.update(symbol, price) }
     }
 }
 
-// Usage
-class NewsPublisher : Observable<String>()
-
-class EmailSubscriber(private val email: String) : Observer<String> {
-    override fun update(value: String) {
-        println("Sending '$value' to $email")
+// Concrete observers
+class PriceDisplay(private val name: String) : StockObserver {
+    override fun update(stockSymbol: String, price: Double) {
+        println("[$name] $stockSymbol is now $${"%.2f".format(price)}")
     }
 }
 
-val publisher = NewsPublisher()
-publisher.addObserver(EmailSubscriber("john@example.com"))
-publisher.addObserver(EmailSubscriber("jane@example.com"))
-publisher.notifyObservers("Breaking News!")
+class PriceAlert(
+    private val targetSymbol: String,
+    private val targetPrice: Double
+) : StockObserver {
+    override fun update(stockSymbol: String, price: Double) {
+        if (stockSymbol == targetSymbol && price <= targetPrice) {
+            println("🚨 ALERT: $stockSymbol dropped to $$price! BUY NOW!")
+        }
+    }
+}
+
+class TradingBot : StockObserver {
+    override fun update(stockSymbol: String, price: Double) {
+        println("🤖 Bot analyzing $stockSymbol at $$price...")
+        // Complex trading logic here
+    }
+}
+
+// Usage:
+fun main() {
+    val market = StockMarket()
+    
+    // Create observers
+    val mainDisplay = PriceDisplay("Main Screen")
+    val mobileApp = PriceDisplay("Mobile App")
+    val buyAlert = PriceAlert("AAPL", 150.0)
+    val bot = TradingBot()
+    
+    // Subscribe
+    market.subscribe(mainDisplay)
+    market.subscribe(mobileApp)
+    market.subscribe(buyAlert)
+    market.subscribe(bot)
+    
+    // Price changes - all observers notified!
+    println("\n--- Price Update 1 ---")
+    market.updatePrice("AAPL", 155.0)
+    
+    println("\n--- Price Update 2 ---")
+    market.updatePrice("AAPL", 148.0)  // Triggers alert!
+    
+    // Unsubscribe mobile app
+    market.unsubscribe(mobileApp)
+    
+    println("\n--- Price Update 3 ---")
+    market.updatePrice("GOOGL", 2800.0)  // Mobile won't get this
+}
 ```
 
-#### Variation 2: Lambda Observer
 ```kotlin
+// ==========================================
+// KOTLIN IDIOMATIC: Using Lambda Observers
+// ==========================================
+
 class EventEmitter<T> {
     private val listeners = mutableListOf<(T) -> Unit>()
     
@@ -1195,440 +1141,344 @@ class EventEmitter<T> {
         listeners.remove(listener)
     }
     
-    fun emit(value: T) {
-        listeners.forEach { it(value) }
+    fun emit(event: T) {
+        listeners.forEach { it(event) }
     }
 }
 
-// Usage
-val onClick = EventEmitter<String>()
-onClick.on { println("Button clicked: $it") }
-onClick.emit("Submit")
-```
+// Usage:
+data class UserEvent(val userId: String, val action: String)
 
-#### Variation 3: Kotlin Flow (Reactive)
-```kotlin
-import kotlinx.coroutines.flow.*
+val userEvents = EventEmitter<UserEvent>()
 
-class StockPriceService {
-    private val _priceFlow = MutableSharedFlow<Double>()
-    val priceFlow: SharedFlow<Double> = _priceFlow
-    
-    suspend fun updatePrice(price: Double) {
-        _priceFlow.emit(price)
+// Add listeners
+userEvents.on { event -> 
+    println("Analytics: ${event.userId} did ${event.action}")
+}
+
+userEvents.on { event ->
+    if (event.action == "purchase") {
+        println("Send thank you email to ${event.userId}")
     }
 }
 
-// Usage
-val service = StockPriceService()
-
-// Observer 1
-service.priceFlow.collect { price ->
-    println("Display: $$price")
-}
-
-// Observer 2
-service.priceFlow.collect { price ->
-    if (price > 100) println("Alert: Price above $100!")
-}
-```
-
-#### Variation 4: Kotlin Delegates.observable
-```kotlin
-import kotlin.properties.Delegates
-
-class User {
-    var name: String by Delegates.observable("Initial") { prop, old, new ->
-        println("${prop.name} changed from $old to $new")
-    }
-    
-    var age: Int by Delegates.vetoable(0) { _, old, new ->
-        new >= 0  // Reject negative values
-    }
-}
+// Emit events
+userEvents.emit(UserEvent("user123", "login"))
+userEvents.emit(UserEvent("user123", "purchase"))
 ```
 
 ---
 
-### 15. Command
+## 9. Command Pattern
 
-**Intent**: Encapsulate request as an object.
+### What is it?
+Encapsulates a **request as an object**, letting you parameterize, queue, log, and undo operations.
+
+### Real-World Analogy
+Think of a **restaurant order**:
+- You tell the waiter what you want (command)
+- Waiter writes it on a slip (command object)
+- Slip goes to kitchen queue (queued)
+- Chef executes the order (execute)
+- If wrong, can be cancelled/redone (undo)
+
+### When to Use?
+- ✅ Undo/Redo functionality
+- ✅ Transaction systems
+- ✅ Task queues
+- ✅ Macro recording
+- ✅ Remote procedure calls
+
+### Implementation
 
 ```kotlin
+// ==========================================
+// SCENARIO: Text Editor with Undo/Redo
+// ==========================================
+
 // Command interface
 interface Command {
     fun execute()
     fun undo()
+    fun description(): String
 }
 
-// Receiver
-class TextEditor {
-    var text = StringBuilder()
+// Receiver - the thing being operated on
+class TextDocument {
+    private val content = StringBuilder()
     
-    fun write(str: String) {
-        text.append(str)
+    fun getText() = content.toString()
+    
+    fun insert(position: Int, text: String) {
+        content.insert(position, text)
     }
     
-    fun delete(length: Int) {
-        if (length <= text.length) {
-            text.delete(text.length - length, text.length)
-        }
+    fun delete(position: Int, length: Int): String {
+        val deleted = content.substring(position, position + length)
+        content.delete(position, position + length)
+        return deleted
     }
 }
 
-// Concrete Commands
-class WriteCommand(
-    private val editor: TextEditor,
+// Concrete commands
+class InsertCommand(
+    private val document: TextDocument,
+    private val position: Int,
     private val text: String
 ) : Command {
-    override fun execute() = editor.write(text)
-    override fun undo() = editor.delete(text.length)
+    override fun execute() {
+        document.insert(position, text)
+    }
+    
+    override fun undo() {
+        document.delete(position, text.length)
+    }
+    
+    override fun description() = "Insert '$text' at position $position"
 }
 
 class DeleteCommand(
-    private val editor: TextEditor,
+    private val document: TextDocument,
+    private val position: Int,
     private val length: Int
 ) : Command {
     private var deletedText = ""
     
     override fun execute() {
-        deletedText = editor.text.takeLast(length)
-        editor.delete(length)
+        deletedText = document.delete(position, length)
     }
     
-    override fun undo() = editor.write(deletedText)
+    override fun undo() {
+        document.insert(position, deletedText)
+    }
+    
+    override fun description() = "Delete $length chars at position $position"
 }
 
-// Invoker
-class CommandManager {
+// Invoker - manages command history
+class TextEditor {
+    private val document = TextDocument()
     private val history = mutableListOf<Command>()
     private val redoStack = mutableListOf<Command>()
     
-    fun execute(command: Command) {
+    fun executeCommand(command: Command) {
         command.execute()
         history.add(command)
-        redoStack.clear()
+        redoStack.clear()  // Clear redo stack on new command
+        println("Executed: ${command.description()}")
+        println("Document: '${document.getText()}'")
     }
     
     fun undo() {
-        if (history.isNotEmpty()) {
-            val command = history.removeLast()
-            command.undo()
-            redoStack.add(command)
+        if (history.isEmpty()) {
+            println("Nothing to undo!")
+            return
         }
+        val command = history.removeLast()
+        command.undo()
+        redoStack.add(command)
+        println("Undone: ${command.description()}")
+        println("Document: '${document.getText()}'")
     }
     
     fun redo() {
-        if (redoStack.isNotEmpty()) {
-            val command = redoStack.removeLast()
-            command.execute()
-            history.add(command)
+        if (redoStack.isEmpty()) {
+            println("Nothing to redo!")
+            return
+        }
+        val command = redoStack.removeLast()
+        command.execute()
+        history.add(command)
+        println("Redone: ${command.description()}")
+        println("Document: '${document.getText()}'")
+    }
+    
+    fun type(text: String) {
+        executeCommand(InsertCommand(document, document.getText().length, text))
+    }
+    
+    fun deleteLastChars(count: Int) {
+        val pos = document.getText().length - count
+        if (pos >= 0) {
+            executeCommand(DeleteCommand(document, pos, count))
         }
     }
 }
 
-// Usage
-val editor = TextEditor()
-val manager = CommandManager()
-
-manager.execute(WriteCommand(editor, "Hello "))
-manager.execute(WriteCommand(editor, "World"))
-println(editor.text)  // Hello World
-
-manager.undo()
-println(editor.text)  // Hello 
-
-manager.redo()
-println(editor.text)  // Hello World
+// Usage:
+fun main() {
+    val editor = TextEditor()
+    
+    editor.type("Hello")
+    editor.type(" World")
+    editor.type("!")
+    // Document: 'Hello World!'
+    
+    editor.undo()  // Remove '!'
+    editor.undo()  // Remove ' World'
+    // Document: 'Hello'
+    
+    editor.redo()  // Add back ' World'
+    // Document: 'Hello World'
+    
+    editor.type("!!!")
+    // Document: 'Hello World!!!'
+}
 ```
 
 ---
 
-### 16. State
+## 10. State Pattern
 
-**Intent**: Allow object to alter behavior when internal state changes.
+### What is it?
+Allows an object to **change its behavior** when its internal state changes. Object appears to change its class.
+
+### Real-World Analogy
+Think of a **vending machine**:
+- **No money state**: Only accepts money
+- **Has money state**: Can select product or get refund
+- **Dispensing state**: Gives product, then returns to no money
+- Same machine, different behavior based on state
+
+### When to Use?
+- ✅ Object behavior depends on state
+- ✅ State transitions are complex
+- ✅ Avoid large switch/if-else on state
+- ✅ Order processing, game states, UI workflows
+
+### Implementation
 
 ```kotlin
+// ==========================================
+// SCENARIO: Order Processing System
+// Order behaves differently based on its status
+// ==========================================
+
 // State interface
 interface OrderState {
     fun next(order: Order)
-    fun prev(order: Order)
-    fun printStatus()
+    fun cancel(order: Order)
+    fun getStatus(): String
 }
 
-// Concrete States
-object OrderedState : OrderState {
-    override fun next(order: Order) { order.state = ShippedState }
-    override fun prev(order: Order) { println("Order is in its initial state") }
-    override fun printStatus() = println("Order placed, waiting to ship")
-}
-
-object ShippedState : OrderState {
-    override fun next(order: Order) { order.state = DeliveredState }
-    override fun prev(order: Order) { order.state = OrderedState }
-    override fun printStatus() = println("Order shipped, in transit")
-}
-
-object DeliveredState : OrderState {
-    override fun next(order: Order) { println("Order already delivered") }
-    override fun prev(order: Order) { order.state = ShippedState }
-    override fun printStatus() = println("Order delivered!")
-}
-
-// Context
-class Order {
-    var state: OrderState = OrderedState
+// Context - the order itself
+class Order(val orderId: String) {
+    var state: OrderState = PendingState()
+        internal set
     
-    fun nextState() = state.next(this)
-    fun prevState() = state.prev(this)
-    fun printStatus() = state.printStatus()
+    fun nextStep() = state.next(this)
+    fun cancel() = state.cancel(this)
+    fun getStatus() = state.getStatus()
 }
 
-// Usage
-val order = Order()
-order.printStatus()  // Order placed
-order.nextState()
-order.printStatus()  // Order shipped
-order.nextState()
-order.printStatus()  // Order delivered
-```
-
-#### Sealed Class State Machine
-```kotlin
-sealed class TrafficLightState {
-    abstract val duration: Long
-    abstract fun next(): TrafficLightState
-    
-    object Red : TrafficLightState() {
-        override val duration = 5000L
-        override fun next() = Green
+// Concrete states
+class PendingState : OrderState {
+    override fun next(order: Order) {
+        println("Order ${order.orderId}: Payment confirmed, moving to CONFIRMED")
+        order.state = ConfirmedState()
     }
     
-    object Yellow : TrafficLightState() {
-        override val duration = 2000L
-        override fun next() = Red
+    override fun cancel(order: Order) {
+        println("Order ${order.orderId}: Cancelled while pending")
+        order.state = CancelledState()
     }
     
-    object Green : TrafficLightState() {
-        override val duration = 4000L
-        override fun next() = Yellow
-    }
+    override fun getStatus() = "PENDING - Awaiting payment"
 }
 
-class TrafficLight {
-    var state: TrafficLightState = TrafficLightState.Red
-        private set
-    
-    fun change() {
-        state = state.next()
-    }
-}
-```
-
----
-
-### 17. Template Method
-
-**Intent**: Define skeleton of algorithm, let subclasses override specific steps.
-
-```kotlin
-abstract class DataMiner {
-    // Template method
-    fun mine(path: String) {
-        val file = openFile(path)
-        val rawData = extractData(file)
-        val data = parseData(rawData)
-        val analysis = analyzeData(data)
-        sendReport(analysis)
-        closeFile(file)
+class ConfirmedState : OrderState {
+    override fun next(order: Order) {
+        println("Order ${order.orderId}: Shipped!")
+        order.state = ShippedState()
     }
     
-    abstract fun openFile(path: String): Any
-    abstract fun extractData(file: Any): String
-    abstract fun parseData(rawData: String): Map<String, Any>
-    abstract fun closeFile(file: Any)
-    
-    // Default implementation - can be overridden
-    open fun analyzeData(data: Map<String, Any>): String {
-        return "Analyzed: ${data.size} items"
+    override fun cancel(order: Order) {
+        println("Order ${order.orderId}: Cancellation requested, processing refund...")
+        order.state = CancelledState()
     }
     
-    open fun sendReport(analysis: String) {
-        println("Report: $analysis")
-    }
+    override fun getStatus() = "CONFIRMED - Preparing for shipment"
 }
 
-class PDFMiner : DataMiner() {
-    override fun openFile(path: String) = "PDF:$path"
-    override fun extractData(file: Any) = "PDF content"
-    override fun parseData(rawData: String) = mapOf("type" to "pdf")
-    override fun closeFile(file: Any) = println("Closed PDF")
+class ShippedState : OrderState {
+    override fun next(order: Order) {
+        println("Order ${order.orderId}: Delivered successfully!")
+        order.state = DeliveredState()
+    }
+    
+    override fun cancel(order: Order) {
+        println("Order ${order.orderId}: Cannot cancel - already shipped!")
+    }
+    
+    override fun getStatus() = "SHIPPED - In transit"
 }
 
-class CSVMiner : DataMiner() {
-    override fun openFile(path: String) = "CSV:$path"
-    override fun extractData(file: Any) = "CSV content"
-    override fun parseData(rawData: String) = mapOf("type" to "csv")
-    override fun closeFile(file: Any) = println("Closed CSV")
+class DeliveredState : OrderState {
+    override fun next(order: Order) {
+        println("Order ${order.orderId}: Already delivered, no next step")
+    }
+    
+    override fun cancel(order: Order) {
+        println("Order ${order.orderId}: Cannot cancel - already delivered. Please initiate return.")
+    }
+    
+    override fun getStatus() = "DELIVERED - Order complete"
+}
+
+class CancelledState : OrderState {
+    override fun next(order: Order) {
+        println("Order ${order.orderId}: Cannot proceed - order was cancelled")
+    }
+    
+    override fun cancel(order: Order) {
+        println("Order ${order.orderId}: Already cancelled")
+    }
+    
+    override fun getStatus() = "CANCELLED"
+}
+
+// Usage:
+fun main() {
+    val order = Order("ORD-12345")
+    
+    println("Status: ${order.getStatus()}")  // PENDING
+    
+    order.nextStep()  // PENDING → CONFIRMED
+    println("Status: ${order.getStatus()}")
+    
+    order.nextStep()  // CONFIRMED → SHIPPED
+    println("Status: ${order.getStatus()}")
+    
+    order.cancel()    // Cannot cancel - already shipped!
+    
+    order.nextStep()  // SHIPPED → DELIVERED
+    println("Status: ${order.getStatus()}")
 }
 ```
 
 ---
 
-### 18. Chain of Responsibility
+## Quick Reference Summary
 
-**Intent**: Pass request along chain of handlers.
-
-```kotlin
-abstract class Handler {
-    var next: Handler? = null
-    
-    fun setNext(handler: Handler): Handler {
-        next = handler
-        return handler
-    }
-    
-    abstract fun handle(request: Request): Boolean
-    
-    protected fun passToNext(request: Request): Boolean {
-        return next?.handle(request) ?: false
-    }
-}
-
-data class Request(val type: String, val amount: Double)
-
-class Manager : Handler() {
-    override fun handle(request: Request): Boolean {
-        return if (request.type == "leave" && request.amount <= 2) {
-            println("Manager approved ${request.amount} days leave")
-            true
-        } else {
-            passToNext(request)
-        }
-    }
-}
-
-class Director : Handler() {
-    override fun handle(request: Request): Boolean {
-        return if (request.type == "leave" && request.amount <= 5) {
-            println("Director approved ${request.amount} days leave")
-            true
-        } else {
-            passToNext(request)
-        }
-    }
-}
-
-class CEO : Handler() {
-    override fun handle(request: Request): Boolean {
-        return if (request.type == "leave") {
-            println("CEO approved ${request.amount} days leave")
-            true
-        } else {
-            println("Request type ${request.type} not supported")
-            false
-        }
-    }
-}
-
-// Usage
-val chain = Manager().apply {
-    setNext(Director()).setNext(CEO())
-}
-
-chain.handle(Request("leave", 1.0))   // Manager approved
-chain.handle(Request("leave", 4.0))   // Director approved
-chain.handle(Request("leave", 10.0))  // CEO approved
-```
+| Pattern | One-Line Description | Key Benefit |
+|---------|---------------------|-------------|
+| **Singleton** | Only one instance exists | Global access, shared state |
+| **Factory** | Creates objects without specifying class | Decouples creation from usage |
+| **Builder** | Builds complex objects step-by-step | Readable, flexible construction |
+| **Decorator** | Adds behavior by wrapping | Add features without inheritance |
+| **Adapter** | Converts one interface to another | Integrates incompatible code |
+| **Proxy** | Controls access to an object | Lazy loading, security, caching |
+| **Strategy** | Swappable algorithms | Runtime flexibility |
+| **Observer** | Notifies dependents of changes | Loose coupling, event handling |
+| **Command** | Encapsulates request as object | Undo/redo, queuing |
+| **State** | Behavior changes with state | Clean state machine code |
 
 ---
 
-### 19. Visitor
+## Interview Tips
 
-**Intent**: Define new operation without changing classes of elements.
-
-```kotlin
-interface DocumentElement {
-    fun accept(visitor: DocumentVisitor)
-}
-
-class TextElement(val text: String) : DocumentElement {
-    override fun accept(visitor: DocumentVisitor) = visitor.visit(this)
-}
-
-class ImageElement(val url: String) : DocumentElement {
-    override fun accept(visitor: DocumentVisitor) = visitor.visit(this)
-}
-
-class TableElement(val rows: Int, val cols: Int) : DocumentElement {
-    override fun accept(visitor: DocumentVisitor) = visitor.visit(this)
-}
-
-// Visitor interface
-interface DocumentVisitor {
-    fun visit(element: TextElement)
-    fun visit(element: ImageElement)
-    fun visit(element: TableElement)
-}
-
-// Concrete Visitors
-class HtmlExporter : DocumentVisitor {
-    val html = StringBuilder()
-    
-    override fun visit(element: TextElement) {
-        html.append("<p>${element.text}</p>")
-    }
-    
-    override fun visit(element: ImageElement) {
-        html.append("<img src='${element.url}'/>")
-    }
-    
-    override fun visit(element: TableElement) {
-        html.append("<table>${element.rows}x${element.cols}</table>")
-    }
-}
-
-class PlainTextExporter : DocumentVisitor {
-    val text = StringBuilder()
-    
-    override fun visit(element: TextElement) {
-        text.append(element.text + "\n")
-    }
-    
-    override fun visit(element: ImageElement) {
-        text.append("[Image: ${element.url}]\n")
-    }
-    
-    override fun visit(element: TableElement) {
-        text.append("[Table: ${element.rows}x${element.cols}]\n")
-    }
-}
-
-// Usage
-val elements = listOf(
-    TextElement("Hello World"),
-    ImageElement("photo.jpg"),
-    TableElement(3, 4)
-)
-
-val htmlExporter = HtmlExporter()
-elements.forEach { it.accept(htmlExporter) }
-println(htmlExporter.html)
-```
-
----
-
-## Quick Reference
-
-| Pattern | When to Use | Kotlin Feature |
-|---------|-------------|----------------|
-| Singleton | Single instance | `object` declaration |
-| Factory | Create objects | Companion object, sealed class |
-| Builder | Complex construction | Named params, DSL, `apply` |
-| Adapter | Interface conversion | Extension functions |
-| Decorator | Add behavior | Delegation (`by`), extensions |
-| Strategy | Interchangeable algorithms | Lambdas, function types |
-| Observer | Event handling | Flow, Delegates.observable |
-| State | State machine | Sealed class |
-| Command | Undo/redo, queue | Data class for commands |
-
+1. **Always explain WHY** before showing code
+2. **Use real-world analogies** - shows understanding
+3. **Discuss trade-offs** - when NOT to use a pattern
+4. **Start simple** - don't over-engineer
+5. **Know Kotlin shortcuts** - object, by lazy, apply/also

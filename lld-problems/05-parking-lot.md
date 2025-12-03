@@ -5,6 +5,222 @@ Design a parking lot system that can manage multiple floors, different vehicle t
 
 ---
 
+## Flow Diagrams
+
+### Vehicle Entry Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      VEHICLE ENTRY FLOW                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   ┌──────────┐     ┌──────────────┐     ┌─────────────────────────┐ │
+│   │ Vehicle  │────▶│ Entry Panel  │────▶│    Parking Lot          │ │
+│   │ Arrives  │     │              │     │    Manager              │ │
+│   └──────────┘     └──────────────┘     └─────────────────────────┘ │
+│                           │                       │                  │
+│                           ▼                       ▼                  │
+│                    ┌─────────────┐        ┌─────────────┐           │
+│                    │Read License │        │Find Suitable│           │
+│                    │   Plate     │        │    Spot     │           │
+│                    └─────────────┘        └─────────────┘           │
+│                                                  │                   │
+│                                      ┌───────────┴────────────┐     │
+│                                      │                        │     │
+│                                 Spot Found              No Spot     │
+│                                      │                        │     │
+│                                      ▼                        ▼     │
+│                              ┌─────────────┐         ┌────────────┐ │
+│                              │Generate     │         │Display     │ │
+│                              │  Ticket     │         │"LOT FULL"  │ │
+│                              └─────────────┘         └────────────┘ │
+│                                      │                              │
+│                                      ▼                              │
+│                              ┌─────────────┐                        │
+│                              │Mark Spot    │                        │
+│                              │ Occupied    │                        │
+│                              └─────────────┘                        │
+│                                      │                              │
+│                                      ▼                              │
+│                              ┌─────────────┐                        │
+│                              │Open Gate    │                        │
+│                              │Give Ticket  │                        │
+│                              └─────────────┘                        │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Vehicle Exit Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      VEHICLE EXIT FLOW                               │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   ┌──────────┐     ┌──────────────┐                                 │
+│   │ Vehicle  │────▶│  Exit Panel  │                                 │
+│   │ at Exit  │     │              │                                 │
+│   └──────────┘     └──────────────┘                                 │
+│                           │                                          │
+│                           ▼                                          │
+│                    ┌─────────────┐                                  │
+│                    │ Scan Ticket │                                  │
+│                    └─────────────┘                                  │
+│                           │                                          │
+│                           ▼                                          │
+│                    ┌─────────────────────────────────────┐          │
+│                    │         Calculate Fee               │          │
+│                    │                                     │          │
+│                    │  Duration = exit_time - entry_time  │          │
+│                    │  Fee = Duration × Rate_per_hour     │          │
+│                    │       + Spot_type_multiplier        │          │
+│                    └─────────────────────────────────────┘          │
+│                           │                                          │
+│                           ▼                                          │
+│                    ┌─────────────┐                                  │
+│                    │Process      │                                  │
+│                    │ Payment     │                                  │
+│                    └─────────────┘                                  │
+│                           │                                          │
+│                      ┌────┴────┐                                    │
+│                      │         │                                    │
+│                 Success      Failed                                 │
+│                      │         │                                    │
+│                      ▼         ▼                                    │
+│               ┌───────────┐ ┌────────────┐                         │
+│               │Free Spot  │ │Retry       │                         │
+│               │Open Gate  │ │Payment     │                         │
+│               │Give Receipt│ └────────────┘                         │
+│               └───────────┘                                         │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Spot Allocation Strategy
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    SPOT ALLOCATION STRATEGY                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Vehicle Type → Spot Type Mapping:                                 │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │ MOTORCYCLE  →  COMPACT only                                  │   │
+│   │ CAR         →  COMPACT, REGULAR                              │   │
+│   │ TRUCK       →  LARGE only                                    │   │
+│   │ ELECTRIC    →  ELECTRIC (with charger), REGULAR              │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│   Allocation Algorithm:                                              │
+│   ┌──────────────────────────────────────────────────────────────┐  │
+│   │  findSpot(vehicle):                                          │  │
+│   │                                                              │  │
+│   │    for floor in floors (sorted by fill %):                   │  │
+│   │      │                                                       │  │
+│   │      └──▶ for spot in floor.spots:                          │  │
+│   │             │                                                │  │
+│   │             ├── spot.isAvailable?                           │  │
+│   │             │        │                                       │  │
+│   │             │   No ──┘                                       │  │
+│   │             │   Yes                                          │  │
+│   │             │    │                                           │  │
+│   │             │    ▼                                           │  │
+│   │             ├── spot.canFit(vehicle)?                       │  │
+│   │             │        │                                       │  │
+│   │             │   No ──┘                                       │  │
+│   │             │   Yes                                          │  │
+│   │             │    │                                           │  │
+│   │             │    ▼                                           │  │
+│   │             └── RETURN spot ✓                               │  │
+│   │                                                              │  │
+│   │    RETURN null (lot full)                                   │  │
+│   └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Parking Lot Physical Layout
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    PARKING LOT LAYOUT                                │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                        FLOOR 3                              │   │
+│   │  ┌───┬───┬───┬───┬───┬───┬───┬───┬───┬───┐                 │   │
+│   │  │ C │ C │ R │ R │ R │ R │ L │ L │ E │ E │                 │   │
+│   │  └───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘                 │   │
+│   │   C = Compact  R = Regular  L = Large  E = Electric        │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                              ▲                                      │
+│                              │ Ramp                                 │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                        FLOOR 2                              │   │
+│   │  ┌───┬───┬───┬───┬───┬───┬───┬───┬───┬───┐                 │   │
+│   │  │ C │ C │ R │ R │ R │ R │ R │ R │ L │ L │                 │   │
+│   │  └───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘                 │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                              ▲                                      │
+│                              │ Ramp                                 │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                        FLOOR 1 (Ground)                     │   │
+│   │  ┌───┬───┬───┬───┬───┬───┬───┬───┬───┬───┐                 │   │
+│   │  │ C │ C │ C │ C │ R │ R │ R │ R │ R │ R │                 │   │
+│   │  └───┴───┴───┴───┴───┴───┴───┴───┴───┴───┘                 │   │
+│   │                                                             │   │
+│   │  ┌─────────┐                              ┌─────────┐       │   │
+│   │  │ ENTRY   │                              │  EXIT   │       │   │
+│   │  │ ──────▶ │                              │ ──────▶ │       │   │
+│   │  └─────────┘                              └─────────┘       │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Fee Calculation Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    FEE CALCULATION                                   │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Input: Ticket (entry_time, spot_type, vehicle_type)               │
+│                                                                      │
+│   ┌──────────────────────────────────────────────────────────────┐  │
+│   │  1. Calculate Duration                                       │  │
+│   │     hours = ceil((exit_time - entry_time) / 3600)            │  │
+│   │                                                              │  │
+│   │  2. Get Base Rate (per hour)                                 │  │
+│   │     ┌──────────────┬────────┐                                │  │
+│   │     │ Spot Type    │ Rate   │                                │  │
+│   │     ├──────────────┼────────┤                                │  │
+│   │     │ COMPACT      │ $2/hr  │                                │  │
+│   │     │ REGULAR      │ $3/hr  │                                │  │
+│   │     │ LARGE        │ $5/hr  │                                │  │
+│   │     │ ELECTRIC     │ $4/hr  │                                │  │
+│   │     └──────────────┴────────┘                                │  │
+│   │                                                              │  │
+│   │  3. Apply Multipliers                                        │  │
+│   │     - Weekend: 1.2x                                          │  │
+│   │     - Peak hours (9-11, 17-19): 1.5x                         │  │
+│   │     - Member discount: 0.8x                                  │  │
+│   │                                                              │  │
+│   │  4. Final Fee = hours × rate × multipliers                   │  │
+│   │                                                              │  │
+│   └──────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+│   Example:                                                           │
+│   - Entry: 9:00 AM, Exit: 2:30 PM (5.5 hours → 6 hours)            │
+│   - Spot: REGULAR ($3/hr)                                           │
+│   - Peak hour entry: 1.5x                                           │
+│   - Fee = 6 × $3 × 1.5 = $27                                        │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements
@@ -150,27 +366,62 @@ object VehicleFactory {
 ```kotlin
 // ==================== Parking Spot ====================
 
+/**
+ * Represents a single parking spot with thread-safe operations.
+ * 
+ * === Thread Safety ===
+ * Uses ReentrantReadWriteLock:
+ * - read lock for isAvailable, getVehicle (allows concurrent reads)
+ * - write lock for park, unpark (exclusive access)
+ * 
+ * === Vehicle Compatibility ===
+ * Each spot type can fit certain vehicles:
+ * - COMPACT: Motorcycles only
+ * - REGULAR: Motorcycles, Cars
+ * - LARGE: Motorcycles, Cars, Trucks
+ * - ELECTRIC: Electric cars (has charging)
+ * 
+ * Time Complexity:
+ * - park(): O(1)
+ * - unpark(): O(1)
+ * - isAvailable: O(1)
+ */
 class ParkingSpot(
-    val id: String,
-    val spotType: SpotType,
-    val floorNumber: Int
+    val id: String,           // Unique spot identifier (e.g., "F1-R5")
+    val spotType: SpotType,   // Type determines which vehicles can park
+    val floorNumber: Int      // For display/navigation purposes
 ) {
-    private var vehicle: Vehicle? = null
+    private var vehicle: Vehicle? = null  // Currently parked vehicle
     private val lock = ReentrantReadWriteLock()
     
+    // Property with read lock - multiple threads can check availability
     val isAvailable: Boolean
         get() = lock.read { vehicle == null }
     
+    /**
+     * Attempt to park a vehicle in this spot.
+     * 
+     * @param vehicle The vehicle to park
+     * @return true if parked successfully, false if spot occupied or incompatible
+     * 
+     * Thread-safe: Uses write lock for exclusive access
+     */
     fun park(vehicle: Vehicle): Boolean {
+        // First check compatibility (no lock needed - vehicle is immutable)
         if (!vehicle.canFitIn(spotType)) return false
         
         return lock.write {
+            // Double-check availability under lock (another thread might have parked)
             if (this.vehicle != null) return@write false
             this.vehicle = vehicle
             true
         }
     }
     
+    /**
+     * Remove vehicle from spot.
+     * @return The vehicle that was parked, or null if spot was empty
+     */
     fun unpark(): Vehicle? {
         return lock.write {
             val parked = vehicle

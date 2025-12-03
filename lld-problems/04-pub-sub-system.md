@@ -5,6 +5,224 @@ Design a Publish-Subscribe messaging system where publishers can send messages t
 
 ---
 
+## Flow Diagrams
+
+### High-Level Pub-Sub Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    PUB-SUB MESSAGE FLOW                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Publishers                    Broker                 Subscribers   │
+│   ──────────                    ──────                 ───────────   │
+│                                                                      │
+│   ┌──────────┐              ┌─────────────┐          ┌──────────┐   │
+│   │Publisher │──publish()──▶│   Topic A   │──notify──▶│Subscriber│   │
+│   │    1     │              │             │          │    1     │   │
+│   └──────────┘              │ ┌─────────┐ │          └──────────┘   │
+│                             │ │Messages │ │                         │
+│   ┌──────────┐              │ │ Queue   │ │          ┌──────────┐   │
+│   │Publisher │──publish()──▶│ └─────────┘ │──notify──▶│Subscriber│   │
+│   │    2     │              └─────────────┘          │    2     │   │
+│   └──────────┘                    │                  └──────────┘   │
+│                                   │                                  │
+│                             ┌─────────────┐          ┌──────────┐   │
+│   ┌──────────┐              │   Topic B   │──notify──▶│Subscriber│   │
+│   │Publisher │──publish()──▶│             │          │    3     │   │
+│   │    3     │              └─────────────┘          └──────────┘   │
+│   └──────────┘                                                      │
+│                                                                      │
+│   Key Points:                                                        │
+│   • Publishers don't know about subscribers                         │
+│   • Subscribers don't know about publishers                         │
+│   • Broker handles all routing                                      │
+│   • Topics decouple publishers from subscribers                     │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Message Publishing Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    PUBLISH MESSAGE FLOW                              │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Publisher                                                          │
+│       │                                                              │
+│       │ publish("orders", message)                                  │
+│       ▼                                                              │
+│   ┌─────────────────┐                                               │
+│   │  MessageBroker  │                                               │
+│   └────────┬────────┘                                               │
+│            │                                                         │
+│            ▼                                                         │
+│   ┌─────────────────┐                                               │
+│   │ Topic exists?   │                                               │
+│   └────────┬────────┘                                               │
+│            │                                                         │
+│       Yes ─┼─ No ──────▶ Create Topic (or throw error)              │
+│            │                                                         │
+│            ▼                                                         │
+│   ┌─────────────────┐                                               │
+│   │ Add to Queue    │                                               │
+│   │ (if persistent) │                                               │
+│   └────────┬────────┘                                               │
+│            │                                                         │
+│            ▼                                                         │
+│   ┌─────────────────────────────────────────────────────────┐       │
+│   │              For each Subscriber:                       │       │
+│   │                      │                                  │       │
+│   │              ┌───────┴───────┐                          │       │
+│   │              │               │                          │       │
+│   │         Sync Mode       Async Mode                      │       │
+│   │              │               │                          │       │
+│   │              ▼               ▼                          │       │
+│   │    ┌─────────────┐  ┌─────────────────┐                │       │
+│   │    │Call directly│  │Submit to        │                │       │
+│   │    │onMessage()  │  │ExecutorService  │                │       │
+│   │    └─────────────┘  └─────────────────┘                │       │
+│   │                             │                          │       │
+│   │                             ▼                          │       │
+│   │                    ┌─────────────────┐                 │       │
+│   │                    │Worker Thread    │                 │       │
+│   │                    │calls onMessage()│                 │       │
+│   │                    └─────────────────┘                 │       │
+│   └─────────────────────────────────────────────────────────┘       │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Subscription Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    SUBSCRIPTION FLOW                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Subscribe:                                                         │
+│   ──────────                                                         │
+│   ┌────────────┐    subscribe("orders")   ┌─────────────────┐       │
+│   │ Subscriber │─────────────────────────▶│  MessageBroker  │       │
+│   └────────────┘                          └────────┬────────┘       │
+│                                                    │                 │
+│                                                    ▼                 │
+│                                           ┌─────────────────┐       │
+│                                           │ Get/Create      │       │
+│                                           │ Topic "orders"  │       │
+│                                           └────────┬────────┘       │
+│                                                    │                 │
+│                                                    ▼                 │
+│                                           ┌─────────────────┐       │
+│                                           │ Add subscriber  │       │
+│                                           │ to topic's list │       │
+│                                           └────────┬────────┘       │
+│                                                    │                 │
+│                                                    ▼                 │
+│                                           ┌─────────────────┐       │
+│                                           │ Return success  │       │
+│                                           └─────────────────┘       │
+│                                                                      │
+│   After Subscribe - Message Delivery:                               │
+│   ───────────────────────────────────                               │
+│                                                                      │
+│   ┌──────────┐     ┌───────────┐     ┌────────────┐                 │
+│   │ New Msg  │────▶│  Topic    │────▶│ Subscriber │                 │
+│   │ arrives  │     │"orders"   │     │ onMessage()│                 │
+│   └──────────┘     │           │     └────────────┘                 │
+│                    │ ┌───────┐ │                                    │
+│                    │ │ Sub 1 │ │                                    │
+│                    │ │ Sub 2 │──────▶ All subscribers               │
+│                    │ │ Sub 3 │ │      receive message               │
+│                    │ └───────┘ │                                    │
+│                    └───────────┘                                    │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Message Filtering Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    MESSAGE FILTERING                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Subscriber with Filter:                                           │
+│   subscribe("orders", filter = { msg -> msg.headers["region"]=="US"})│
+│                                                                      │
+│   Message Delivery with Filter:                                     │
+│                                                                      │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │ Message: { topic: "orders", headers: {region: "EU"} }       │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                              │                                       │
+│                              ▼                                       │
+│   ┌───────────────────────────────────────────────────────────────┐ │
+│   │                    For each Subscriber:                       │ │
+│   │                                                               │ │
+│   │  Subscriber 1 (no filter)     Subscriber 2 (filter: US only) │ │
+│   │         │                              │                      │ │
+│   │         ▼                              ▼                      │ │
+│   │  ┌─────────────┐               ┌─────────────┐               │ │
+│   │  │   DELIVER   │               │Apply Filter │               │ │
+│   │  │   Message   │               │region=="US"?│               │ │
+│   │  └─────────────┘               └──────┬──────┘               │ │
+│   │                                       │                       │ │
+│   │                                  No (EU≠US)                   │ │
+│   │                                       │                       │ │
+│   │                                       ▼                       │ │
+│   │                                ┌─────────────┐               │ │
+│   │                                │   SKIP      │               │ │
+│   │                                │   Message   │               │ │
+│   │                                └─────────────┘               │ │
+│   └───────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Handling Slow Subscribers
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    SLOW SUBSCRIBER HANDLING                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Problem: Slow subscriber blocks other subscribers                 │
+│                                                                      │
+│   Solution 1: Async Delivery with Queue per Subscriber              │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                                                             │   │
+│   │  Topic ──▶ ┌────────────────┐ ──▶ Subscriber 1 (fast)      │   │
+│   │            │ Queue: [M1,M2] │                               │   │
+│   │            └────────────────┘                               │   │
+│   │                                                             │   │
+│   │        ──▶ ┌────────────────┐ ──▶ Subscriber 2 (slow)      │   │
+│   │            │ Queue: [M1...] │     Processing M1...          │   │
+│   │            │ (backing up)   │                               │   │
+│   │            └────────────────┘                               │   │
+│   │                                                             │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│   Solution 2: Drop messages if queue full                           │
+│   ┌─────────────────────────────────────────────────────────────┐   │
+│   │                                                             │   │
+│   │  if (subscriberQueue.isFull()) {                           │   │
+│   │      log.warn("Dropping message for slow subscriber")      │   │
+│   │      // Or: disconnect subscriber                          │   │
+│   │  } else {                                                   │   │
+│   │      subscriberQueue.add(message)                          │   │
+│   │  }                                                          │   │
+│   │                                                             │   │
+│   └─────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│   Solution 3: Backpressure - notify publisher to slow down          │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Requirements
 
 ### Functional Requirements
@@ -120,13 +338,38 @@ data class FilteredSubscriber<T>(
 ```kotlin
 // ==================== Topic ====================
 
+/**
+ * Represents a message topic that subscribers can listen to.
+ * 
+ * === Thread Safety ===
+ * - ConcurrentHashMap for subscriber storage
+ * - ExecutorService for async message delivery
+ * - ReentrantReadWriteLock for complex operations
+ * 
+ * === Message Delivery ===
+ * - Async (default): Messages delivered via ExecutorService
+ * - Sync: Direct method call, blocks publisher
+ * 
+ * === Message History ===
+ * - Maintains last N messages for replay on subscribe
+ * - Useful for late-joining subscribers
+ * - Bounded to prevent memory issues
+ * 
+ * Time Complexity:
+ * - addSubscriber: O(1)
+ * - publish: O(n) where n = subscribers
+ * - removeSubscriber: O(1)
+ */
 class Topic<T>(
     val name: String,
     private val executor: ExecutorService = Executors.newCachedThreadPool()
 ) {
+    // Thread-safe subscriber storage: subscriberId → (subscriber, filter)
     private val subscribers = ConcurrentHashMap<String, FilteredSubscriber<T>>()
+    
+    // Bounded message history for replay functionality
     private val messageHistory = ConcurrentLinkedQueue<Message<T>>()
-    private val historyLimit = 1000
+    private val historyLimit = 1000  // Prevent unbounded growth
     
     private val lock = ReentrantReadWriteLock()
     

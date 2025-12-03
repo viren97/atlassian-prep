@@ -298,19 +298,65 @@ class CompositeCommandBuilder(private val description: String) {
 ```kotlin
 // ==================== Command Manager ====================
 
+/**
+ * Manages command execution with undo/redo capability.
+ * 
+ * === Data Structure ===
+ * Uses two stacks:
+ * - undoStack: Commands that can be undone
+ * - redoStack: Commands that were undone and can be redone
+ * 
+ * === Visual Representation ===
+ * 
+ *   Initial: undoStack=[], redoStack=[]
+ *   
+ *   execute(A): undoStack=[A], redoStack=[]
+ *   execute(B): undoStack=[B,A], redoStack=[]
+ *   execute(C): undoStack=[C,B,A], redoStack=[]
+ *   
+ *   undo():    undoStack=[B,A], redoStack=[C]
+ *   undo():    undoStack=[A], redoStack=[C,B]
+ *   
+ *   redo():    undoStack=[B,A], redoStack=[C]
+ *   
+ *   execute(D): undoStack=[D,B,A], redoStack=[] ← redo cleared!
+ * 
+ * === Command Merging ===
+ * Consecutive similar commands can be merged:
+ * - Typing "H", "e", "l", "l", "o" → single "Hello" command
+ * - Reduces undo steps for better UX
+ * 
+ * === Time Complexity ===
+ * - execute: O(1) amortized
+ * - undo: O(1)
+ * - redo: O(1)
+ * 
+ * @param historyLimit Maximum commands to remember (prevents memory issues)
+ * @param enableMerging Whether to merge consecutive similar commands
+ */
 class CommandManager(
     private val historyLimit: Int = 100,
     private val enableMerging: Boolean = true
 ) {
-    private val undoStack = ArrayDeque<Command>()
-    private val redoStack = ArrayDeque<Command>()
+    private val undoStack = ArrayDeque<Command>()  // Commands to undo
+    private val redoStack = ArrayDeque<Command>()  // Commands to redo
     
     private val listeners = mutableListOf<CommandListener>()
     
     // ==================== Execute ====================
     
+    /**
+     * Execute a command and add to undo history.
+     * 
+     * Steps:
+     * 1. Try to merge with last command (if enabled)
+     * 2. Execute the command
+     * 3. Push to undo stack
+     * 4. Clear redo stack (can't redo after new action)
+     * 5. Enforce history limit
+     */
     fun execute(command: Command) {
-        // Try to merge with last command
+        // Try to merge with last command (e.g., consecutive typing)
         if (enableMerging && undoStack.isNotEmpty()) {
             val lastCommand = undoStack.peek()
             if (lastCommand.canMergeWith(command)) {
@@ -324,11 +370,14 @@ class CommandManager(
             }
         }
         
+        // Execute and track
         command.execute()
         undoStack.push(command)
+        
+        // New action invalidates redo history
         redoStack.clear()
         
-        // Enforce history limit
+        // Enforce history limit (remove oldest)
         while (undoStack.size > historyLimit) {
             undoStack.removeLast()
         }

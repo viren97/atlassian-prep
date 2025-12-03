@@ -348,6 +348,14 @@ interface ElevatorDispatcher {
 
 // ==================== Nearest Elevator ====================
 
+/**
+ * Simple dispatcher: assigns the nearest available elevator.
+ * 
+ * Pros: Simple, predictable
+ * Cons: Doesn't consider direction or existing destinations
+ * 
+ * Time Complexity: O(e) where e = number of elevators
+ */
 class NearestElevatorDispatcher : ElevatorDispatcher {
     override fun dispatch(request: ElevatorRequest, elevators: List<Elevator>): Elevator? {
         return elevators
@@ -358,11 +366,35 @@ class NearestElevatorDispatcher : ElevatorDispatcher {
 
 // ==================== LOOK Algorithm (Elevator Algorithm) ====================
 
+/**
+ * LOOK Algorithm - Smart elevator dispatching.
+ * 
+ * === How It Works ===
+ * The LOOK algorithm (similar to disk scheduling) services requests
+ * in one direction until no more requests in that direction, then reverses.
+ * 
+ * === Priority Order ===
+ * 1. Elevator already moving towards request in same direction
+ *    - Most efficient: no direction change needed
+ * 2. Idle elevator nearest to request
+ *    - No current tasks, can service immediately  
+ * 3. Least loaded elevator
+ *    - Fallback: balance load across elevators
+ * 
+ * === Example ===
+ * Elevator at floor 5, going UP, destinations: [7, 10]
+ * Request at floor 8 going UP → ASSIGN (on the way)
+ * Request at floor 3 going DOWN → DON'T assign (wrong direction)
+ * 
+ * === Time Complexity ===
+ * O(e) where e = number of elevators
+ */
 class LookDispatcher : ElevatorDispatcher {
     override fun dispatch(request: ElevatorRequest, elevators: List<Elevator>): Elevator? {
         val availableElevators = elevators.filter { it.state != ElevatorState.MAINTENANCE }
         
         // Priority 1: Elevator already moving towards this floor in same direction
+        // This is the most efficient assignment - no wasted travel
         val movingTowards = availableElevators.find { elevator ->
             when (elevator.direction) {
                 Direction.UP -> elevator.currentFloor < request.sourceFloor && 
@@ -374,13 +406,15 @@ class LookDispatcher : ElevatorDispatcher {
         }
         if (movingTowards != null) return movingTowards
         
-        // Priority 2: Idle elevator
+        // Priority 2: Idle elevator (nearest one)
+        // No current tasks, can respond quickly
         val idleElevator = availableElevators
             .filter { it.direction == Direction.IDLE }
             .minByOrNull { abs(it.currentFloor - request.sourceFloor) }
         if (idleElevator != null) return idleElevator
         
         // Priority 3: Any available elevator (least loaded)
+        // Balance load when no ideal option exists
         return availableElevators.minByOrNull { it.getDestinationCount() }
     }
 }

@@ -139,21 +139,62 @@ enum class MoveResult {
 ```kotlin
 // ==================== Snake ====================
 
+/**
+ * The snake entity with movement and collision logic.
+ * 
+ * === Data Structure ===
+ * Uses Deque + Set for O(1) operations:
+ * - Deque (body): Ordered positions, head at front, tail at back
+ * - Set (bodySet): Fast O(1) collision detection
+ * 
+ * === Visual Representation ===
+ * 
+ *   HEAD                           TAIL
+ *    @----O----O----O----O----O----O
+ *    ↑
+ *    Direction of movement
+ * 
+ * body = [head, ..., tail]
+ * bodySet = {all positions} for O(1) collision check
+ * 
+ * === Movement Algorithm ===
+ * 1. Calculate new head position
+ * 2. Check for self-collision (excluding tail if not growing)
+ * 3. Add new head to front of deque
+ * 4. If not growing: remove tail from back
+ * 5. Update bodySet accordingly
+ * 
+ * === Why Deque + Set? ===
+ * - Deque: O(1) addFirst, removeLast (perfect for snake movement)
+ * - Set: O(1) contains check (fast collision detection)
+ * - Together: O(1) movement with O(1) collision check
+ * 
+ * === 180° Turn Prevention ===
+ * Snake can't reverse direction (would cause instant self-collision).
+ * Example: If going RIGHT, can't go LEFT (but UP/DOWN are ok).
+ * 
+ * @param initialPosition Starting position for snake head
+ * @param initialLength Initial snake size (default 3)
+ * @param initialDirection Starting movement direction
+ */
 class Snake(
     initialPosition: Position,
     initialLength: Int = 3,
     initialDirection: Direction = Direction.RIGHT
 ) {
+    // Deque: head at front, tail at back - O(1) add/remove at both ends
     private val body: Deque<Position> = ArrayDeque()
+    // Set: O(1) collision detection
     private val bodySet: MutableSet<Position> = mutableSetOf()
     private var currentDirection: Direction = initialDirection
     
     init {
-        // Initialize snake body
+        // Build initial snake body from head backwards
         var pos = initialPosition
         for (i in 0 until initialLength) {
             body.addLast(pos)
             bodySet.add(pos)
+            // Move backwards from head to build tail
             pos = pos.move(initialDirection.opposite())
         }
     }

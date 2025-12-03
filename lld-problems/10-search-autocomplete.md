@@ -82,26 +82,68 @@ data class Suggestion(
 ```kotlin
 // ==================== Trie ====================
 
+/**
+ * Trie (Prefix Tree) optimized for autocomplete.
+ * 
+ * === Data Structure ===
+ * 
+ *         root
+ *        /    \
+ *       a      b
+ *      /|\      \
+ *     p n t      a
+ *    /  |  \      \
+ *   p   d   e      l
+ *  /              /  \
+ * le            l    loon
+ * 
+ * "apple", "and", "ate", "ball", "balloon"
+ * 
+ * === Optimization: Pre-computed Top-K ===
+ * Each node stores top-k suggestions for its prefix.
+ * - Query "app" → immediately return cached suggestions
+ * - No need to traverse entire subtree
+ * 
+ * === Time Complexity ===
+ * - Insert: O(L) where L = word length
+ * - Search with cached top-k: O(P) where P = prefix length
+ * - Search without cache: O(P + N) where N = matching words
+ * 
+ * === Space Complexity ===
+ * - O(ALPHABET_SIZE × N × L) worst case
+ * - In practice: much less due to shared prefixes
+ * 
+ * @param maxSuggestionsPerNode How many suggestions to cache per node
+ */
 class Trie(private val maxSuggestionsPerNode: Int = 10) {
     private val root = TrieNode()
     
     // ==================== Insert ====================
     
+    /**
+     * Insert a word with its frequency into the trie.
+     * Also updates cached top suggestions along the path.
+     * 
+     * @param word The word to insert
+     * @param frequency Initial frequency (or increment if exists)
+     */
     fun insert(word: String, frequency: Int = 1) {
         if (word.isBlank()) return
         
         var current = root
         val normalizedWord = word.lowercase().trim()
         
+        // Traverse/create path for each character
         for (char in normalizedWord) {
             current = current.children.getOrPut(char) { TrieNode() }
         }
         
+        // Mark end of word and update frequency
         current.isEndOfWord = true
         current.frequency += frequency
         current.word = normalizedWord
         
-        // Update top suggestions along the path
+        // Update top suggestions along the path (optimization)
         updateSuggestions(normalizedWord, current.frequency)
     }
     

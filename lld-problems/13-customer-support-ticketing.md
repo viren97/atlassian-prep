@@ -157,31 +157,51 @@ class AgentStats(
 // ==================== Agent Comparator ====================
 
 /**
- * Compares agents by:
- * 1. Average rating (descending)
- * 2. Number of ratings (descending) - more ratings = more reliable
- * 3. Agent name (ascending) - lexicographically smallest
+ * Multi-level comparator for ranking support agents.
+ * 
+ * === Comparison Order (Tie-Breaking) ===
+ * 1. Average rating (DESCENDING) - higher rating wins
+ * 2. Number of ratings (DESCENDING) - more ratings = more reliable
+ * 3. Agent name (ASCENDING) - alphabetically first wins
+ * 
+ * === Why This Order? ===
+ * - Rating is primary: best performers should rank first
+ * - Count breaks ties: agent with 100 ratings at 4.5 is more
+ *   reliable than one with 2 ratings at 4.5
+ * - Name is final tiebreaker: deterministic, fair ordering
+ * 
+ * === Example ===
+ * Alice: 4.5 avg, 50 ratings
+ * Bob:   4.5 avg, 100 ratings  
+ * Carol: 4.5 avg, 100 ratings
+ * 
+ * Sorted: Bob, Carol, Alice (by count, then name)
+ * 
+ * @param yearMonth If set, compares monthly stats; null = all-time
  */
 class AgentComparator(
     private val yearMonth: YearMonth? = null // null for all-time
 ) : Comparator<AgentStats> {
     
     override fun compare(a1: AgentStats, a2: AgentStats): Int {
+        // Get appropriate averages (monthly or all-time)
         val avg1 = if (yearMonth != null) a1.getMonthlyAverage(yearMonth) else a1.getAverageRating()
         val avg2 = if (yearMonth != null) a2.getMonthlyAverage(yearMonth) else a2.getAverageRating()
         
-        // First: compare by average rating (descending)
+        // Level 1: Average rating (DESCENDING - higher is better)
+        // avg2.compareTo(avg1) gives descending order
         val avgComparison = avg2.compareTo(avg1)
         if (avgComparison != 0) return avgComparison
         
-        // Second: compare by rating count (descending)
+        // Level 2: Rating count (DESCENDING - more reviews = more reliable)
         val count1 = if (yearMonth != null) a1.getMonthlyRatingCount(yearMonth) else a1.getRatingCount()
         val count2 = if (yearMonth != null) a2.getMonthlyRatingCount(yearMonth) else a2.getRatingCount()
         
         val countComparison = count2.compareTo(count1)
         if (countComparison != 0) return countComparison
         
-        // Third: compare by name (ascending)
+        // Level 3: Name (ASCENDING - alphabetical tiebreaker)
+        // a1.compareTo(a2) gives ascending order
         return a1.agentId.compareTo(a2.agentId)
     }
 }
